@@ -17,13 +17,13 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { VOICE_CHANNELS, useApp, type ChannelId, type Member } from "@/lib/store";
+import { VOICE_CHANNELS, setState, useApp, type ChannelId, type Member } from "@/lib/store";
 import type { VoiceClient } from "@/lib/rtc";
 import { Avatar } from "./Avatar";
 import { SettingsDialog } from "./SettingsDialog";
 import { PhoneCamDialog } from "./PhoneCamDialog";
 
-function MemberRow({ m, speaking, me, client }: { m: Member; speaking: boolean; me: string; client: VoiceClient }) {
+function MemberRow({ m, speaking, me }: { m: Member; speaking: boolean; me: string }) {
   return (
     <div
       draggable
@@ -43,8 +43,6 @@ function MemberRow({ m, speaking, me, client }: { m: Member; speaking: boolean; 
         {m.camStream && <Video className="h-3.5 w-3.5" />}
         {m.deafened ? <HeadphoneOff className="h-3.5 w-3.5 text-destructive" /> : m.muted ? <MicOff className="h-3.5 w-3.5 text-destructive" /> : null}
       </span>
-      {/* hidden usage to keep client typed */}
-      {false && client.me}
     </div>
   );
 }
@@ -143,7 +141,7 @@ export function Sidebar({ client }: { client: VoiceClient }) {
                 {list.length > 0 && (
                   <div className="pl-4 pb-1">
                     {list.map((m) => (
-                      <MemberRow key={m.peerId} m={m} speaking={!!speaking[m.peerId]} me={profile.peerId} client={client} />
+                      <MemberRow key={m.peerId} m={m} speaking={!!speaking[m.peerId]} me={profile.peerId} />
                     ))}
                   </div>
                 )}
@@ -155,7 +153,7 @@ export function Sidebar({ client }: { client: VoiceClient }) {
         <div>
           <p className="px-2 text-[11px] uppercase tracking-wider text-muted-foreground font-semibold mb-1">Canal de texto</p>
           <button
-            onClick={() => useAppSet({ view: "text" })}
+            onClick={() => setState({ view: "text" })}
             className={cn(
               "w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm hover:bg-sidebar-accent transition-colors",
               view === "text" && "bg-sidebar-accent text-sidebar-accent-foreground",
@@ -218,5 +216,3 @@ export function Sidebar({ client }: { client: VoiceClient }) {
     </aside>
   );
 }
-
-import { setState as useAppSet } from "@/lib/store";
