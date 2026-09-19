@@ -7,7 +7,7 @@ import { Sidebar } from "@/components/app/Sidebar";
 import { TextChannel } from "@/components/app/TextChannel";
 import { VoiceView } from "@/components/app/VoiceView";
 import { getClient } from "@/lib/rtc";
-import { useApp } from "@/lib/store";
+import { getState, useApp } from "@/lib/store";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -49,11 +49,6 @@ function App() {
     };
   }, [client]);
 
-  useEffect(() => {
-    void client.setMic(useAppDeviceMic());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // Hotkeys: push-to-talk, mute, deafen.
   useEffect(() => {
     const isTyping = (t: EventTarget | null) =>
@@ -68,10 +63,10 @@ function App() {
       }
       if (e.code === settings.muteKey) {
         e.preventDefault();
-        void client.setMuted(!useAppSnapshotMuted());
+        void client.setMuted(!getState().muted);
       } else if (e.code === settings.deafenKey) {
         e.preventDefault();
-        void client.setDeafened(!useAppSnapshotDeafened());
+        void client.setDeafened(!getState().deafened);
       }
     };
     const up = (e: KeyboardEvent) => {

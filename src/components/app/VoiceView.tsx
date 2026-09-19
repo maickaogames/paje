@@ -59,7 +59,7 @@ function Tile({ m, me, client }: { m: Member; me: string; client: VoiceClient })
       )}
     >
       {cam ? (
-        <Video stream={cam} mirror={isMe && !useAppPhone()} />
+        <Video stream={cam} mirror={isMe && !phoneCam} />
       ) : (
         <Avatar src={m.avatar} name={m.nickname} size={88} />
       )}
