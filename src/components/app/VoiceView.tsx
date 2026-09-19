@@ -42,11 +42,14 @@ function Tile({ m, me, client }: { m: Member; me: string; client: VoiceClient })
   const speaking = useApp((s) => !!s.speaking[m.peerId]);
   const remote = useApp((s) => s.streams[m.peerId]);
   const localCam = useApp((s) => s.localCam);
+  const localSharing = useApp((s) => s.sharing);
+  const phoneCam = useApp((s) => s.phoneCamConnected);
   const volume = useApp((s) => s.volumes[m.peerId] ?? 1);
   const ping = useApp((s) => s.pings[m.peerId]);
   const isMe = m.peerId === me;
   const cam = isMe ? localCam : remote?.cam;
-  const hasScreen = isMe ? !!useApp.length && !!m.screenStream : !!remote?.screen;
+  const hasScreen = isMe ? localSharing : !!remote?.screen;
+
 
   const tile = (
     <div
@@ -56,7 +59,7 @@ function Tile({ m, me, client }: { m: Member; me: string; client: VoiceClient })
       )}
     >
       {cam ? (
-        <Video stream={cam} mirror={isMe && !useAppPhone()} />
+        <Video stream={cam} mirror={isMe && !phoneCam} />
       ) : (
         <Avatar src={m.avatar} name={m.nickname} size={88} />
       )}
