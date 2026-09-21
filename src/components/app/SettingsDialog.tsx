@@ -46,7 +46,19 @@ export function SettingsDialog({
   function patch(p: Partial<Settings>) {
     setState({ settings: { ...settings, ...p } });
     if ("ptt" in p) client.applyMicEnabled();
+    if ("micGain" in p || "micMonitor" in p) client.applyMicTuning();
+    if ("noiseSuppression" in p) void client.reopenMic();
   }
+
+  // Desliga o monitoramento ao fechar as configurações, para não gerar eco.
+  useEffect(() => {
+    if (open) return;
+    if (useApp.length) void 0;
+    if (settings.micMonitor) {
+      setState({ settings: { ...settings, micMonitor: false } });
+      client.applyMicTuning();
+    }
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function changeDevices(d: typeof devices) {
     const prev = devices;
