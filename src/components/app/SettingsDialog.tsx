@@ -53,7 +53,6 @@ export function SettingsDialog({
   // Desliga o monitoramento ao fechar as configurações, para não gerar eco.
   useEffect(() => {
     if (open) return;
-    if (useApp.length) void 0;
     if (settings.micMonitor) {
       setState({ settings: { ...settings, micMonitor: false } });
       client.applyMicTuning();
