@@ -62,6 +62,10 @@ export class VoiceClient {
   private peers = new Map<string, Peer>();
   private phonePeer: Peer | null = null;
   private micStream: MediaStream | null = null;
+  private rawMicStream: MediaStream | null = null;
+  private micGainNode: GainNode | null = null;
+  private monitorGain: GainNode | null = null;
+  private micDest: MediaStreamAudioDestinationNode | null = null;
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private localAnalyser: AnalyserNode | null = null;
