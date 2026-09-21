@@ -114,7 +114,9 @@ export class VoiceClient {
     if (this.statsTimer) clearInterval(this.statsTimer);
     await this.leaveChannel();
     this.micStream?.getTracks().forEach((t) => t.stop());
+    this.rawMicStream?.getTracks().forEach((t) => t.stop());
     this.micStream = null;
+    this.rawMicStream = null;
     if (this.channel) await supabase.removeChannel(this.channel);
     this.channel = null;
     this.started = false;
