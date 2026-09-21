@@ -30,6 +30,9 @@ export interface Settings {
   deafenKey: string;
   powerSave: boolean;
   vadThreshold: number; // 0..1 RMS
+  micGain: number; // 0.2..3 ganho do microfone
+  noiseSuppression: boolean;
+  micMonitor: boolean; // ouvir o próprio microfone
 }
 
 export interface Member {
