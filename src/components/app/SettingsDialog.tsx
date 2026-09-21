@@ -46,7 +46,18 @@ export function SettingsDialog({
   function patch(p: Partial<Settings>) {
     setState({ settings: { ...settings, ...p } });
     if ("ptt" in p) client.applyMicEnabled();
+    if ("micGain" in p || "micMonitor" in p) client.applyMicTuning();
+    if ("noiseSuppression" in p) void client.reopenMic();
   }
+
+  // Desliga o monitoramento ao fechar as configurações, para não gerar eco.
+  useEffect(() => {
+    if (open) return;
+    if (settings.micMonitor) {
+      setState({ settings: { ...settings, micMonitor: false } });
+      client.applyMicTuning();
+    }
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function changeDevices(d: typeof devices) {
     const prev = devices;
@@ -95,6 +106,33 @@ export function SettingsDialog({
                 onValueChange={([v]) => patch({ vadThreshold: v ?? 0.02 })}
               />
             </div>
+          </Row>
+        </section>
+
+        <section className="space-y-3 pt-4 border-t">
+          <h3 className="text-sm font-semibold">Microfone</h3>
+          <Row
+            label={`Sensibilidade do microfone (${Math.round(settings.micGain * 100)}%)`}
+            hint="Aumente se os amigos dizem que sua voz está baixa"
+          >
+            <div className="w-40">
+              <Slider
+                min={0.2}
+                max={3}
+                step={0.05}
+                value={[settings.micGain]}
+                onValueChange={([v]) => patch({ micGain: v ?? 1 })}
+              />
+            </div>
+          </Row>
+          <Row label="Supressor de ruído" hint="Remove ventilador, teclado e chiado do ambiente">
+            <Switch
+              checked={settings.noiseSuppression}
+              onCheckedChange={(noiseSuppression) => patch({ noiseSuppression })}
+            />
+          </Row>
+          <Row label="Ouvir meu microfone" hint="Use fones para testar o ajuste sem eco">
+            <Switch checked={settings.micMonitor} onCheckedChange={(micMonitor) => patch({ micMonitor })} />
           </Row>
         </section>
 

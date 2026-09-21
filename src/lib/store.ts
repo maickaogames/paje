@@ -30,6 +30,9 @@ export interface Settings {
   deafenKey: string;
   powerSave: boolean;
   vadThreshold: number; // 0..1 RMS
+  micGain: number; // 0.2..3 ganho do microfone
+  noiseSuppression: boolean;
+  micMonitor: boolean; // ouvir o próprio microfone
 }
 
 export interface Member {
@@ -114,6 +117,9 @@ const defaults: AppState = {
     deafenKey: "F9",
     powerSave: true,
     vadThreshold: 0.02,
+    micGain: 1,
+    noiseSuppression: true,
+    micMonitor: false,
   },
   connected: false,
   members: {},

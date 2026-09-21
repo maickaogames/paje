@@ -62,6 +62,10 @@ export class VoiceClient {
   private peers = new Map<string, Peer>();
   private phonePeer: Peer | null = null;
   private micStream: MediaStream | null = null;
+  private rawMicStream: MediaStream | null = null;
+  private micGainNode: GainNode | null = null;
+  private monitorGain: GainNode | null = null;
+  private micDest: MediaStreamAudioDestinationNode | null = null;
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private localAnalyser: AnalyserNode | null = null;
@@ -110,7 +114,9 @@ export class VoiceClient {
     if (this.statsTimer) clearInterval(this.statsTimer);
     await this.leaveChannel();
     this.micStream?.getTracks().forEach((t) => t.stop());
+    this.rawMicStream?.getTracks().forEach((t) => t.stop());
     this.micStream = null;
+    this.rawMicStream = null;
     if (this.channel) await supabase.removeChannel(this.channel);
     this.channel = null;
     this.started = false;
@@ -536,8 +542,23 @@ export class VoiceClient {
     this.micStream?.getAudioTracks().forEach((t) => (t.enabled = on));
   }
 
+  /** Ganho (sensibilidade) e monitoramento local, sem reabrir o microfone. */
+  applyMicTuning() {
+    const s = getState().settings;
+    if (this.micGainNode) this.micGainNode.gain.value = s.micGain;
+    if (this.monitorGain) this.monitorGain.gain.value = s.micMonitor ? 1 : 0;
+  }
+
+  /** Reabre o microfone para aplicar o supressor de ruído. */
+  async reopenMic() {
+    const d = getState().devices.mic;
+    if (d === "none" || !this.rawMicStream) return;
+    await this.setMic(d);
+  }
+
   async setMic(deviceId: string) {
     const old = this.micStream;
+    const oldRaw = this.rawMicStream;
     if (deviceId === "none") {
       if (old) {
         old.getTracks().forEach((t) => {
@@ -545,30 +566,49 @@ export class VoiceClient {
           t.stop();
         });
       }
-      this.micStream = null;
+      oldRaw?.getTracks().forEach((t) => t.stop());
+      this.micStream = this.rawMicStream = null;
       this.localSource?.disconnect();
+      this.micGainNode?.disconnect();
+      this.monitorGain?.disconnect();
       this.localSource = this.localAnalyser = null;
+      this.micGainNode = this.monitorGain = this.micDest = null;
       await this.publishPresence();
       return;
     }
+    const st = getState().settings;
     const constraints: MediaTrackConstraints = {
       echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
+      noiseSuppression: st.noiseSuppression,
+      autoGainControl: st.noiseSuppression,
       channelCount: 1,
     };
     if (deviceId !== "default") constraints.deviceId = { exact: deviceId };
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
+    const raw = await navigator.mediaDevices.getUserMedia({ audio: constraints });
+
+    // Cadeia: microfone → ganho → (destino enviado aos amigos, analisador de fala, monitor)
+    const ctx = this.ensureCtx();
+    this.localSource?.disconnect();
+    this.micGainNode?.disconnect();
+    this.monitorGain?.disconnect();
+    this.localSource = ctx.createMediaStreamSource(raw);
+    this.micGainNode = ctx.createGain();
+    this.localAnalyser = ctx.createAnalyser();
+    this.localAnalyser.fftSize = 256;
+    this.micDest = ctx.createMediaStreamDestination();
+    this.monitorGain = ctx.createGain();
+    this.localSource.connect(this.micGainNode);
+    this.micGainNode.connect(this.localAnalyser);
+    this.micGainNode.connect(this.micDest);
+    this.micGainNode.connect(this.monitorGain).connect(ctx.destination);
+    this.applyMicTuning();
+
+    const stream = this.micDest.stream;
     const track = stream.getAudioTracks()[0]!;
     const oldTrack = old?.getAudioTracks()[0];
     this.micStream = stream;
-    // local VAD
-    const ctx = this.ensureCtx();
-    this.localSource?.disconnect();
-    this.localSource = ctx.createMediaStreamSource(stream);
-    this.localAnalyser = ctx.createAnalyser();
-    this.localAnalyser.fftSize = 256;
-    this.localSource.connect(this.localAnalyser);
+    this.rawMicStream = raw;
+    if (oldRaw && oldRaw !== raw) oldRaw.getTracks().forEach((t) => t.stop());
 
     this.peers.forEach((p) => {
       const sender = oldTrack ? p.senders.get(oldTrack) : undefined;
