@@ -99,6 +99,33 @@ export function SettingsDialog({
         </section>
 
         <section className="space-y-3 pt-4 border-t">
+          <h3 className="text-sm font-semibold">Microfone</h3>
+          <Row
+            label={`Sensibilidade do microfone (${Math.round(settings.micGain * 100)}%)`}
+            hint="Aumente se os amigos dizem que sua voz está baixa"
+          >
+            <div className="w-40">
+              <Slider
+                min={0.2}
+                max={3}
+                step={0.05}
+                value={[settings.micGain]}
+                onValueChange={([v]) => patch({ micGain: v ?? 1 })}
+              />
+            </div>
+          </Row>
+          <Row label="Supressor de ruído" hint="Remove ventilador, teclado e chiado do ambiente">
+            <Switch
+              checked={settings.noiseSuppression}
+              onCheckedChange={(noiseSuppression) => patch({ noiseSuppression })}
+            />
+          </Row>
+          <Row label="Ouvir meu microfone" hint="Use fones para testar o ajuste sem eco">
+            <Switch checked={settings.micMonitor} onCheckedChange={(micMonitor) => patch({ micMonitor })} />
+          </Row>
+        </section>
+
+        <section className="space-y-3 pt-4 border-t">
           <h3 className="text-sm font-semibold">Atalhos (com a janela em foco)</h3>
           <Row label="Mutar microfone">
             <KeyPicker value={settings.muteKey} onChange={(muteKey) => patch({ muteKey })} />
