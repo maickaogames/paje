@@ -888,6 +888,7 @@ export class PhoneCamClient {
 let client: VoiceClient | null = null;
 export function getClient(peerId: string) {
   if (!client || client.me !== peerId) client = new VoiceClient(peerId);
+  if (import.meta.env.DEV) (window as unknown as { __voice?: VoiceClient }).__voice = client;
   return client;
 }
 export function currentClient() {
