@@ -811,6 +811,16 @@ export class PhoneCamClient {
       video: { facingMode: facing },
       audio: false,
     });
+    // Garante zoom no mínimo (padrão do telefone) quando a câmera expõe esse controle.
+    const vt = this.stream.getVideoTracks()[0];
+    const caps = (vt?.getCapabilities?.() ?? {}) as { zoom?: { min?: number } };
+    if (vt && caps.zoom?.min != null) {
+      try {
+        await vt.applyConstraints({ advanced: [{ zoom: caps.zoom.min }] } as MediaTrackConstraints);
+      } catch {
+        /* ignore */
+      }
+    }
     this.channel = supabase.channel(ROOM, {
       config: { presence: { key: this.me }, broadcast: { self: false, ack: false } },
     });
