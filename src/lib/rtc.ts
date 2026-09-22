@@ -10,6 +10,12 @@ import { getState, setState, type ChannelId, type Member, type RemoteStreams, VO
 
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+  // Retransmissão pública gratuita: salva conexões em redes restritivas (CGNAT, Wi-Fi corporativo).
+  {
+    urls: ["turn:openrelay.metered.ca:80", "turn:openrelay.metered.ca:443", "turns:openrelay.metered.ca:443?transport=tcp"],
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
 ];
 const ROOM = "litevoice-room";
 
