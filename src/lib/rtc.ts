@@ -81,7 +81,18 @@ export class VoiceClient {
 
   /* ---------------- lifecycle ---------------- */
 
-  async start() {
+  /** start/stop are serialized: React remounts must never leave us half-connected. */
+  start() {
+    this.op = this.op.then(() => this.doStart()).catch((e) => console.warn("start failed", e));
+    return this.op;
+  }
+
+  stop() {
+    this.op = this.op.then(() => this.doStop()).catch((e) => console.warn("stop failed", e));
+    return this.op;
+  }
+
+  private async doStart() {
     if (this.started) return;
     this.started = true;
     this.channel = supabase.channel(ROOM, {
