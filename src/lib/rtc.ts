@@ -74,6 +74,7 @@ export class VoiceClient {
   private statsTimer: number | null = null;
   private vadBuf = new Uint8Array(256);
   private started = false;
+  private op: Promise<void> = Promise.resolve();
 
   constructor(peerId: string) {
     this.me = peerId;
