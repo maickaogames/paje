@@ -120,7 +120,8 @@ export class VoiceClient {
     this.statsTimer = window.setInterval(() => void this.collectStats(), 3000);
   }
 
-  async stop() {
+  private async doStop() {
+    if (!this.started) return;
     document.removeEventListener("visibilitychange", this.onVisibility);
     if (this.vadTimer) clearInterval(this.vadTimer);
     if (this.statsTimer) clearInterval(this.statsTimer);
