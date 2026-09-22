@@ -816,7 +816,7 @@ export class PhoneCamClient {
     const caps = (vt?.getCapabilities?.() ?? {}) as { zoom?: { min?: number } };
     if (vt && caps.zoom?.min != null) {
       try {
-        await vt.applyConstraints({ advanced: [{ zoom: caps.zoom.min }] } as MediaTrackConstraints);
+        await vt.applyConstraints({ advanced: [{ zoom: caps.zoom.min }] } as unknown as MediaTrackConstraints);
       } catch {
         /* ignore */
       }
