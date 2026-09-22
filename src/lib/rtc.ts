@@ -10,6 +10,12 @@ import { getState, setState, type ChannelId, type Member, type RemoteStreams, VO
 
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+  // Retransmissão pública gratuita: salva conexões em redes restritivas (CGNAT, Wi-Fi corporativo).
+  {
+    urls: ["turn:openrelay.metered.ca:80", "turn:openrelay.metered.ca:443", "turns:openrelay.metered.ca:443?transport=tcp"],
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
 ];
 const ROOM = "litevoice-room";
 
@@ -74,6 +80,7 @@ export class VoiceClient {
   private statsTimer: number | null = null;
   private vadBuf = new Uint8Array(256);
   private started = false;
+  private op: Promise<void> = Promise.resolve();
 
   constructor(peerId: string) {
     this.me = peerId;
@@ -81,7 +88,18 @@ export class VoiceClient {
 
   /* ---------------- lifecycle ---------------- */
 
-  async start() {
+  /** start/stop are serialized: React remounts must never leave us half-connected. */
+  start() {
+    this.op = this.op.then(() => this.doStart()).catch((e) => console.warn("start failed", e));
+    return this.op;
+  }
+
+  stop() {
+    this.op = this.op.then(() => this.doStop()).catch((e) => console.warn("stop failed", e));
+    return this.op;
+  }
+
+  private async doStart() {
     if (this.started) return;
     this.started = true;
     this.channel = supabase.channel(ROOM, {
@@ -108,7 +126,8 @@ export class VoiceClient {
     this.statsTimer = window.setInterval(() => void this.collectStats(), 3000);
   }
 
-  async stop() {
+  private async doStop() {
+    if (!this.started) return;
     document.removeEventListener("visibilitychange", this.onVisibility);
     if (this.vadTimer) clearInterval(this.vadTimer);
     if (this.statsTimer) clearInterval(this.statsTimer);
@@ -794,9 +813,20 @@ export class PhoneCamClient {
 
   async start(facing: "environment" | "user" = "environment") {
     this.stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+      // Sem pedir resolução: o celular escolhe a câmera padrão, sem recorte/zoom.
+      video: { facingMode: facing },
       audio: false,
     });
+    // Garante zoom no mínimo (padrão do telefone) quando a câmera expõe esse controle.
+    const vt = this.stream.getVideoTracks()[0];
+    const caps = (vt?.getCapabilities?.() ?? {}) as { zoom?: { min?: number } };
+    if (vt && caps.zoom?.min != null) {
+      try {
+        await vt.applyConstraints({ advanced: [{ zoom: caps.zoom.min }] } as unknown as MediaTrackConstraints);
+      } catch {
+        /* ignore */
+      }
+    }
     this.channel = supabase.channel(ROOM, {
       config: { presence: { key: this.me }, broadcast: { self: false, ack: false } },
     });
@@ -864,6 +894,7 @@ export class PhoneCamClient {
 let client: VoiceClient | null = null;
 export function getClient(peerId: string) {
   if (!client || client.me !== peerId) client = new VoiceClient(peerId);
+  if (import.meta.env.DEV) (window as unknown as { __voice?: VoiceClient }).__voice = client;
   return client;
 }
 export function currentClient() {
