@@ -807,7 +807,8 @@ export class PhoneCamClient {
 
   async start(facing: "environment" | "user" = "environment") {
     this.stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+      // Sem pedir resolução: o celular escolhe a câmera padrão, sem recorte/zoom.
+      video: { facingMode: facing },
       audio: false,
     });
     this.channel = supabase.channel(ROOM, {
