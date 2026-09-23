@@ -936,6 +936,7 @@ export class VoiceClient {
       t.stop();
     });
     setState({ localScreen: null, sharing: false });
+    sfx.shareStop();
     if (publish) await this.publishPresence();
   }
 }
