@@ -94,6 +94,8 @@ export class VoiceClient {
   private localAnalyser: AnalyserNode | null = null;
   private localSource: MediaStreamAudioSourceNode | null = null;
   private vadTimer: number | null = null;
+  private reconnectTimer: number | null = null;
+  private reconnectAttempt = 0;
   private statsTimer: number | null = null;
   private vadBuf = new Uint8Array(256);
   private started = false;
