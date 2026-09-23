@@ -769,13 +769,21 @@ export class VoiceClient {
   async setMuted(v: boolean) {
     setState({ muted: v });
     this.applyMicEnabled();
+    if (v) sfx.mute();
+    else sfx.unmute();
     await this.publishPresence();
   }
 
   async setDeafened(v: boolean) {
     setState({ deafened: v });
     if (this.master) this.master.gain.value = v ? 0 : 1;
+    this.peers.forEach((p) => {
+      if (p.micEl) p.micEl.muted = v;
+      if (p.screenEl) p.screenEl.muted = v;
+    });
     this.applyMicEnabled();
+    if (v) sfx.deafen();
+    else sfx.undeafen();
     await this.publishPresence();
   }
 
@@ -802,17 +810,23 @@ export class VoiceClient {
         console.warn("mic unavailable", e);
       }
     }
+    sfx.join();
     const def = VOICE_CHANNELS.find((c) => c.id === ch);
-    if (def?.autoMute && !getState().muted) await this.setMuted(true);
+    if (def?.autoMute && !getState().muted) {
+      setState({ muted: true });
+      this.applyMicEnabled();
+    }
     await this.publishPresence();
     this.reconcilePeers(getState().members);
   }
 
   async leaveChannel() {
+    const wasIn = !!getState().myChannel;
     for (const id of [...this.peers.keys()]) this.closePeer(id);
     await this.stopShare(false);
     await this.stopCam(false);
-    setState({ myChannel: null, view: "text", watching: null, speaking: {}, pings: {} });
+    setState({ myChannel: null, view: "text", watching: null, speaking: {}, pings: {}, quality: {} });
+    if (wasIn) sfx.leave();
     await this.publishPresence();
   }
 
@@ -887,14 +901,21 @@ export class VoiceClient {
   /* ---------------- screen share ---------------- */
 
   async startShare() {
+    // `systemAudio: "exclude"` + `displaySurface: "window"` fazem o navegador oferecer
+    // as janelas dos programas abertos e só o áudio daquilo que for escolhido,
+    // em vez do som do sistema inteiro.
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: {
+        displaySurface: "window",
         width: { ideal: 1920 },
         height: { ideal: 1080 },
         frameRate: { ideal: 60, max: 60 },
       },
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-    });
+      systemAudio: "exclude",
+      selfBrowserSurface: "exclude",
+      surfaceSwitching: "include",
+    } as DisplayMediaStreamOptions);
     const v = stream.getVideoTracks()[0];
     if (v) {
       v.contentHint = "motion";
