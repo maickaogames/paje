@@ -392,16 +392,23 @@ export class VoiceClient {
     return this.ctx;
   }
 
+  /** Direciona a saída para o dispositivo escolhido (cada elemento de áudio remoto). */
   async applySink() {
-    const ctx = this.ctx as (AudioContext & { setSinkId?: (id: string) => Promise<void> }) | null;
     const speaker = getState().devices.speaker;
-    if (!ctx?.setSinkId) return;
-    try {
-      if (speaker === "none") await ctx.setSinkId("");
-      else if (speaker !== "default") await ctx.setSinkId(speaker);
-      else await ctx.setSinkId("");
-    } catch {
-      /* unsupported device */
+    const id = speaker === "default" || speaker === "none" ? "" : speaker;
+    const els: HTMLAudioElement[] = [];
+    this.peers.forEach((p) => {
+      if (p.micEl) els.push(p.micEl);
+      if (p.screenEl) els.push(p.screenEl);
+    });
+    for (const el of els) {
+      const sinkable = el as HTMLAudioElement & { setSinkId?: (i: string) => Promise<void> };
+      if (!sinkable.setSinkId) continue;
+      try {
+        await sinkable.setSinkId(id);
+      } catch {
+        /* dispositivo indisponível */
+      }
     }
   }
 
@@ -413,33 +420,26 @@ export class VoiceClient {
     const cam = m.camStream ? peer.streams.get(m.camStream) : undefined;
     const screen = m.screenStream ? peer.streams.get(m.screenStream) : undefined;
 
-    // audio graph for mic
+    // Voz remota: toca em <audio> (o cancelador de eco do navegador só atua nesse caminho);
+    // a WebAudio recebe apenas uma derivação para o indicador de fala, sem saída de som.
     if (mic && peer.micStreamId !== mic.id) {
       this.detachMicAudio(peer);
       const ctx = this.ensureCtx();
       peer.source = ctx.createMediaStreamSource(mic);
-      peer.gain = ctx.createGain();
-      peer.gain.gain.value = getState().volumes[id] ?? 1;
       peer.analyser = ctx.createAnalyser();
       peer.analyser.fftSize = 256;
-      peer.source.connect(peer.gain).connect(this.master!);
       peer.source.connect(peer.analyser);
-      peer.keepAlive.push(this.keepAliveEl(mic));
+      peer.micEl = this.playEl(mic, getState().volumes[id] ?? 1);
       peer.micStreamId = mic.id;
     } else if (!mic && peer.micStreamId) {
       this.detachMicAudio(peer);
     }
 
-    // audio graph for screen share audio
+    // Áudio da transmissão de tela: elemento próprio, com volume independente.
     const screenAudio = screen?.getAudioTracks().length ? screen : undefined;
     if (screenAudio && peer.screenStreamId !== screenAudio.id) {
       this.detachScreenAudio(peer);
-      const ctx = this.ensureCtx();
-      peer.screenSource = ctx.createMediaStreamSource(screenAudio);
-      peer.screenGain = ctx.createGain();
-      peer.screenGain.gain.value = getState().screenVolume;
-      peer.screenSource.connect(peer.screenGain).connect(this.master!);
-      peer.keepAlive.push(this.keepAliveEl(screenAudio));
+      peer.screenEl = this.playEl(screenAudio, getState().screenVolume);
       peer.screenStreamId = screenAudio.id;
     } else if (!screenAudio && peer.screenStreamId) {
       this.detachScreenAudio(peer);
@@ -453,50 +453,53 @@ export class VoiceClient {
     }
   }
 
-  /** Chrome only pulls remote audio into WebAudio if an <audio> element consumes it. */
-  private keepAliveEl(stream: MediaStream) {
+  private playEl(stream: MediaStream, volume: number) {
     const el = document.createElement("audio");
     el.srcObject = stream;
-    el.muted = true;
     el.autoplay = true;
+    el.volume = Math.min(1, Math.max(0, volume));
+    el.muted = getState().deafened;
     void el.play().catch(() => {});
+    void this.applySink();
     return el;
+  }
+
+  private dropEl(el: HTMLAudioElement | undefined) {
+    if (!el) return;
+    el.pause();
+    el.srcObject = null;
   }
 
   private detachMicAudio(peer: Peer) {
     peer.source?.disconnect();
-    peer.gain?.disconnect();
     peer.analyser?.disconnect();
-    peer.source = peer.gain = peer.analyser = undefined;
+    peer.source = peer.analyser = undefined;
+    this.dropEl(peer.micEl);
+    peer.micEl = undefined;
     peer.micStreamId = null;
   }
 
   private detachScreenAudio(peer: Peer) {
-    peer.screenSource?.disconnect();
-    peer.screenGain?.disconnect();
-    peer.screenSource = peer.screenGain = undefined;
+    this.dropEl(peer.screenEl);
+    peer.screenEl = undefined;
     peer.screenStreamId = null;
   }
 
   private teardownAudio(peer: Peer) {
     this.detachMicAudio(peer);
     this.detachScreenAudio(peer);
-    peer.keepAlive.forEach((el) => {
-      el.srcObject = null;
-    });
-    peer.keepAlive = [];
   }
 
   setVolume(id: string, v: number) {
     setState((s) => ({ volumes: { ...s.volumes, [id]: v } }));
     const p = this.peers.get(id);
-    if (p?.gain) p.gain.gain.value = v;
+    if (p?.micEl) p.micEl.volume = Math.min(1, Math.max(0, v));
   }
 
   setScreenVolume(v: number) {
     setState({ screenVolume: v });
     this.peers.forEach((p) => {
-      if (p.screenGain) p.screenGain.gain.value = v;
+      if (p.screenEl) p.screenEl.volume = Math.min(1, Math.max(0, v));
     });
   }
 
