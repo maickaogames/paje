@@ -73,6 +73,7 @@ export interface AppState {
   speaking: Record<string, boolean>;
   volumes: Record<string, number>; // 0..2
   pings: Record<string, number>;
+  quality: Record<string, "good" | "fair" | "poor">;
   streams: Record<string, RemoteStreams>;
   localCam: MediaStream | null;
   localScreen: MediaStream | null;
@@ -133,6 +134,7 @@ const defaults: AppState = {
   speaking: {},
   volumes: {},
   pings: {},
+  quality: {},
   streams: {},
   localCam: null,
   localScreen: null,

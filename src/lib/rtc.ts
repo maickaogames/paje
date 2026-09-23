@@ -7,6 +7,7 @@
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import { getState, setState, type ChannelId, type Member, type RemoteStreams, VOICE_CHANNELS } from "./store";
+import { sfx } from "./sfx";
 
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
@@ -18,6 +19,17 @@ const ICE_SERVERS: RTCIceServer[] = [
   },
 ];
 const ROOM = "litevoice-room";
+
+/** Qualidade estimada da conexão com cada amigo. */
+export type Quality = "good" | "fair" | "poor";
+
+/** Perfis de qualidade aplicados automaticamente quando a rede piora. */
+const LEVELS = [
+  { video: 2_500_000, screen: 8_000_000, fps: 60, scale: 1, audio: 40_000 },
+  { video: 900_000, screen: 3_000_000, fps: 30, scale: 1.5, audio: 32_000 },
+  { video: 350_000, screen: 1_200_000, fps: 20, scale: 2, audio: 24_000 },
+  { video: 150_000, screen: 600_000, fps: 12, scale: 3, audio: 16_000 },
+] as const;
 
 interface Signal {
   to: string;
@@ -48,13 +60,19 @@ class Peer {
   streams = new Map<string, MediaStream>();
   senders = new Map<MediaStreamTrack, RTCRtpSender>();
   source: MediaStreamAudioSourceNode | undefined;
-  gain: GainNode | undefined;
   analyser: AnalyserNode | undefined;
-  screenSource: MediaStreamAudioSourceNode | undefined;
-  screenGain: GainNode | undefined;
-  keepAlive: HTMLAudioElement[] = [];
+  /** Áudio remoto toca em <audio> (caminho WebRTC) para o cancelador de eco do navegador agir. */
+  micEl: HTMLAudioElement | undefined;
+  screenEl: HTMLAudioElement | undefined;
   micStreamId: string | null = null;
   screenStreamId: string | null = null;
+  /** Monitoramento adaptativo da conexão. */
+  lastLost = 0;
+  lastRecv = 0;
+  quality: Quality = "good";
+  level = 0; // 0 = qualidade cheia, 3 = mínima (só voz)
+  restarts = 0;
+  lastRestart = 0;
 
   constructor(pc: RTCPeerConnection, polite: boolean) {
     this.pc = pc;
@@ -77,6 +95,8 @@ export class VoiceClient {
   private localAnalyser: AnalyserNode | null = null;
   private localSource: MediaStreamAudioSourceNode | null = null;
   private vadTimer: number | null = null;
+  private reconnectTimer: number | null = null;
+  private reconnectAttempt = 0;
   private statsTimer: number | null = null;
   private vadBuf = new Uint8Array(256);
   private started = false;
@@ -116,8 +136,9 @@ export class VoiceClient {
         if (status === "SUBSCRIBED") {
           setState({ connected: true });
           await this.publishPresence();
-        } else if (status === "CLOSED" || status === "CHANNEL_ERROR") {
+        } else if (status === "CLOSED" || status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
           setState({ connected: false });
+          this.scheduleReconnect();
         }
       });
 
@@ -245,7 +266,16 @@ export class VoiceClient {
       this.send({ to: id, from: this.me, candidate: candidate ? candidate.toJSON() : null });
     };
     pc.oniceconnectionstatechange = () => {
-      if (pc.iceConnectionState === "failed") pc.restartIce();
+      const st = pc.iceConnectionState;
+      if (st === "failed") this.revivePeer(id, peer, true);
+      else if (st === "disconnected") {
+        // Dá um instante para a rede voltar sozinha antes de renegociar.
+        window.setTimeout(() => {
+          if (pc.iceConnectionState === "disconnected") this.revivePeer(id, peer, false);
+        }, 2500);
+      } else if (st === "connected" || st === "completed") {
+        peer.restarts = 0;
+      }
     };
     pc.ontrack = (ev) => {
       const stream = ev.streams[0];
@@ -386,16 +416,23 @@ export class VoiceClient {
     return this.ctx;
   }
 
+  /** Direciona a saída para o dispositivo escolhido (cada elemento de áudio remoto). */
   async applySink() {
-    const ctx = this.ctx as (AudioContext & { setSinkId?: (id: string) => Promise<void> }) | null;
     const speaker = getState().devices.speaker;
-    if (!ctx?.setSinkId) return;
-    try {
-      if (speaker === "none") await ctx.setSinkId("");
-      else if (speaker !== "default") await ctx.setSinkId(speaker);
-      else await ctx.setSinkId("");
-    } catch {
-      /* unsupported device */
+    const id = speaker === "default" || speaker === "none" ? "" : speaker;
+    const els: HTMLAudioElement[] = [];
+    this.peers.forEach((p) => {
+      if (p.micEl) els.push(p.micEl);
+      if (p.screenEl) els.push(p.screenEl);
+    });
+    for (const el of els) {
+      const sinkable = el as HTMLAudioElement & { setSinkId?: (i: string) => Promise<void> };
+      if (!sinkable.setSinkId) continue;
+      try {
+        await sinkable.setSinkId(id);
+      } catch {
+        /* dispositivo indisponível */
+      }
     }
   }
 
@@ -407,33 +444,26 @@ export class VoiceClient {
     const cam = m.camStream ? peer.streams.get(m.camStream) : undefined;
     const screen = m.screenStream ? peer.streams.get(m.screenStream) : undefined;
 
-    // audio graph for mic
+    // Voz remota: toca em <audio> (o cancelador de eco do navegador só atua nesse caminho);
+    // a WebAudio recebe apenas uma derivação para o indicador de fala, sem saída de som.
     if (mic && peer.micStreamId !== mic.id) {
       this.detachMicAudio(peer);
       const ctx = this.ensureCtx();
       peer.source = ctx.createMediaStreamSource(mic);
-      peer.gain = ctx.createGain();
-      peer.gain.gain.value = getState().volumes[id] ?? 1;
       peer.analyser = ctx.createAnalyser();
       peer.analyser.fftSize = 256;
-      peer.source.connect(peer.gain).connect(this.master!);
       peer.source.connect(peer.analyser);
-      peer.keepAlive.push(this.keepAliveEl(mic));
+      peer.micEl = this.playEl(mic, getState().volumes[id] ?? 1);
       peer.micStreamId = mic.id;
     } else if (!mic && peer.micStreamId) {
       this.detachMicAudio(peer);
     }
 
-    // audio graph for screen share audio
+    // Áudio da transmissão de tela: elemento próprio, com volume independente.
     const screenAudio = screen?.getAudioTracks().length ? screen : undefined;
     if (screenAudio && peer.screenStreamId !== screenAudio.id) {
       this.detachScreenAudio(peer);
-      const ctx = this.ensureCtx();
-      peer.screenSource = ctx.createMediaStreamSource(screenAudio);
-      peer.screenGain = ctx.createGain();
-      peer.screenGain.gain.value = getState().screenVolume;
-      peer.screenSource.connect(peer.screenGain).connect(this.master!);
-      peer.keepAlive.push(this.keepAliveEl(screenAudio));
+      peer.screenEl = this.playEl(screenAudio, getState().screenVolume);
       peer.screenStreamId = screenAudio.id;
     } else if (!screenAudio && peer.screenStreamId) {
       this.detachScreenAudio(peer);
@@ -447,50 +477,53 @@ export class VoiceClient {
     }
   }
 
-  /** Chrome only pulls remote audio into WebAudio if an <audio> element consumes it. */
-  private keepAliveEl(stream: MediaStream) {
+  private playEl(stream: MediaStream, volume: number) {
     const el = document.createElement("audio");
     el.srcObject = stream;
-    el.muted = true;
     el.autoplay = true;
+    el.volume = Math.min(1, Math.max(0, volume));
+    el.muted = getState().deafened;
     void el.play().catch(() => {});
+    void this.applySink();
     return el;
+  }
+
+  private dropEl(el: HTMLAudioElement | undefined) {
+    if (!el) return;
+    el.pause();
+    el.srcObject = null;
   }
 
   private detachMicAudio(peer: Peer) {
     peer.source?.disconnect();
-    peer.gain?.disconnect();
     peer.analyser?.disconnect();
-    peer.source = peer.gain = peer.analyser = undefined;
+    peer.source = peer.analyser = undefined;
+    this.dropEl(peer.micEl);
+    peer.micEl = undefined;
     peer.micStreamId = null;
   }
 
   private detachScreenAudio(peer: Peer) {
-    peer.screenSource?.disconnect();
-    peer.screenGain?.disconnect();
-    peer.screenSource = peer.screenGain = undefined;
+    this.dropEl(peer.screenEl);
+    peer.screenEl = undefined;
     peer.screenStreamId = null;
   }
 
   private teardownAudio(peer: Peer) {
     this.detachMicAudio(peer);
     this.detachScreenAudio(peer);
-    peer.keepAlive.forEach((el) => {
-      el.srcObject = null;
-    });
-    peer.keepAlive = [];
   }
 
   setVolume(id: string, v: number) {
     setState((s) => ({ volumes: { ...s.volumes, [id]: v } }));
     const p = this.peers.get(id);
-    if (p?.gain) p.gain.gain.value = v;
+    if (p?.micEl) p.micEl.volume = Math.min(1, Math.max(0, v));
   }
 
   setScreenVolume(v: number) {
     setState({ screenVolume: v });
     this.peers.forEach((p) => {
-      if (p.screenGain) p.screenGain.gain.value = v;
+      if (p.screenEl) p.screenEl.volume = Math.min(1, Math.max(0, v));
     });
   }
 
@@ -524,26 +557,116 @@ export class VoiceClient {
     if (changed || Object.keys(s.speaking).length !== Object.keys(next).length) setState({ speaking: next });
   }
 
-  /* ---------------- stats / ping ---------------- */
+  /* ---------------- suporte constante: monitorar e adaptar ---------------- */
+
+  /** Reassina a sala em tempo real com espera progressiva. */
+  private scheduleReconnect() {
+    if (!this.started || this.reconnectTimer) return;
+    this.reconnectAttempt = Math.min(this.reconnectAttempt + 1, 6);
+    const delay = Math.min(15000, 800 * 2 ** (this.reconnectAttempt - 1));
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      if (!this.started || !this.channel) return;
+      try {
+        void this.channel.subscribe();
+      } catch {
+        this.scheduleReconnect();
+      }
+    }, delay);
+  }
+
+  /** Recupera uma conexão P2P instável sem pedir nada ao usuário. */
+  private revivePeer(id: string, peer: Peer, hard: boolean) {
+    if (!this.peers.get(id)) return;
+    const now = Date.now();
+    if (now - peer.lastRestart < 4000) return;
+    peer.lastRestart = now;
+    peer.restarts += 1;
+    // Piora a qualidade preventivamente: voz primeiro, imagem depois.
+    void this.applyLevel(peer, Math.min(LEVELS.length - 1, peer.level + 1));
+    try {
+      peer.pc.restartIce();
+    } catch {
+      /* ignore */
+    }
+    // Se nem o reinício do ICE resolve, refaz a conexão inteira.
+    if (hard && peer.restarts >= 3) {
+      peer.restarts = 0;
+      this.closePeer(id);
+      const member = getState().members[id];
+      if (member && member.channel === getState().myChannel) {
+        this.createPeer(id);
+        this.resolveStreams(id);
+      }
+    }
+  }
+
+  /** Aplica um perfil de qualidade aos envios desta conexão. */
+  private async applyLevel(peer: Peer, level: number) {
+    if (peer.level === level) return;
+    peer.level = level;
+    const prof = LEVELS[level]!;
+    const screen = getState().localScreen;
+    for (const [track, sender] of peer.senders) {
+      try {
+        const p = sender.getParameters();
+        if (!p.encodings?.length) p.encodings = [{}];
+        const enc = p.encodings[0]!;
+        if (track.kind === "audio") {
+          enc.maxBitrate = prof.audio;
+        } else {
+          const isScreen = !!screen && screen.getTracks().includes(track);
+          enc.maxBitrate = isScreen ? prof.screen : prof.video;
+          enc.maxFramerate = isScreen ? prof.fps : Math.min(prof.fps, 30);
+          enc.scaleResolutionDownBy = isScreen ? 1 : prof.scale;
+          p.degradationPreference = isScreen ? "maintain-framerate" : "maintain-framerate";
+        }
+        await sender.setParameters(p);
+      } catch {
+        /* navegador sem suporte */
+      }
+    }
+  }
 
   private async collectStats() {
     if (this.peers.size === 0) return;
     const pings: Record<string, number> = {};
+    const quality: Record<string, Quality> = {};
     await Promise.all(
       [...this.peers.entries()].map(async ([id, p]) => {
         try {
           const report = await p.pc.getStats();
+          let rtt: number | null = null;
+          let lost = 0;
+          let recv = 0;
           report.forEach((r) => {
             if (r.type === "candidate-pair" && (r.nominated || r.selected) && r.currentRoundTripTime != null) {
-              pings[id] = Math.round(r.currentRoundTripTime * 1000);
+              rtt = Math.round(r.currentRoundTripTime * 1000);
+            }
+            if (r.type === "inbound-rtp" && r.kind === "audio") {
+              lost += (r.packetsLost as number) ?? 0;
+              recv += (r.packetsReceived as number) ?? 0;
             }
           });
+          if (rtt != null) pings[id] = rtt;
+          const dLost = Math.max(0, lost - p.lastLost);
+          const dRecv = Math.max(0, recv - p.lastRecv);
+          p.lastLost = lost;
+          p.lastRecv = recv;
+          const loss = dRecv + dLost > 0 ? dLost / (dRecv + dLost) : 0;
+          const bad = loss > 0.07 || (rtt ?? 0) > 260;
+          const soso = loss > 0.02 || (rtt ?? 0) > 150;
+          p.quality = bad ? "poor" : soso ? "fair" : "good";
+          quality[id] = p.quality;
+          // Sobe ou desce um degrau por medição: o ajuste fica suave, sem cortes bruscos.
+          const target = bad ? Math.min(LEVELS.length - 1, p.level + 1) : p.quality === "good" ? Math.max(0, p.level - 1) : p.level;
+          if (target !== p.level) await this.applyLevel(p, target);
         } catch {
           /* ignore */
         }
       }),
     );
-    setState({ pings });
+    setState({ pings, quality });
   }
 
   /* ---------------- mic ---------------- */
@@ -647,13 +770,21 @@ export class VoiceClient {
   async setMuted(v: boolean) {
     setState({ muted: v });
     this.applyMicEnabled();
+    if (v) sfx.mute();
+    else sfx.unmute();
     await this.publishPresence();
   }
 
   async setDeafened(v: boolean) {
     setState({ deafened: v });
     if (this.master) this.master.gain.value = v ? 0 : 1;
+    this.peers.forEach((p) => {
+      if (p.micEl) p.micEl.muted = v;
+      if (p.screenEl) p.screenEl.muted = v;
+    });
     this.applyMicEnabled();
+    if (v) sfx.deafen();
+    else sfx.undeafen();
     await this.publishPresence();
   }
 
@@ -680,17 +811,23 @@ export class VoiceClient {
         console.warn("mic unavailable", e);
       }
     }
+    sfx.join();
     const def = VOICE_CHANNELS.find((c) => c.id === ch);
-    if (def?.autoMute && !getState().muted) await this.setMuted(true);
+    if (def?.autoMute && !getState().muted) {
+      setState({ muted: true });
+      this.applyMicEnabled();
+    }
     await this.publishPresence();
     this.reconcilePeers(getState().members);
   }
 
   async leaveChannel() {
+    const wasIn = !!getState().myChannel;
     for (const id of [...this.peers.keys()]) this.closePeer(id);
     await this.stopShare(false);
     await this.stopCam(false);
-    setState({ myChannel: null, view: "text", watching: null, speaking: {}, pings: {} });
+    setState({ myChannel: null, view: "text", watching: null, speaking: {}, pings: {}, quality: {} });
+    if (wasIn) sfx.leave();
     await this.publishPresence();
   }
 
@@ -765,20 +902,28 @@ export class VoiceClient {
   /* ---------------- screen share ---------------- */
 
   async startShare() {
+    // `systemAudio: "exclude"` + `displaySurface: "window"` fazem o navegador oferecer
+    // as janelas dos programas abertos e só o áudio daquilo que for escolhido,
+    // em vez do som do sistema inteiro.
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: {
+        displaySurface: "window",
         width: { ideal: 1920 },
         height: { ideal: 1080 },
         frameRate: { ideal: 60, max: 60 },
       },
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-    });
+      systemAudio: "exclude",
+      selfBrowserSurface: "exclude",
+      surfaceSwitching: "include",
+    } as DisplayMediaStreamOptions);
     const v = stream.getVideoTracks()[0];
     if (v) {
       v.contentHint = "motion";
       v.onended = () => void this.stopShare();
     }
     setState({ localScreen: stream, sharing: true });
+    sfx.shareStart();
     stream.getTracks().forEach((t) => this.peers.forEach((p) => this.addTrackTo(p, t, stream)));
     await this.publishPresence();
   }
@@ -791,6 +936,7 @@ export class VoiceClient {
       t.stop();
     });
     setState({ localScreen: null, sharing: false });
+    sfx.shareStop();
     if (publish) await this.publishPresence();
   }
 }
