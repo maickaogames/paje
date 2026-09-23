@@ -19,6 +19,17 @@ const ICE_SERVERS: RTCIceServer[] = [
 ];
 const ROOM = "litevoice-room";
 
+/** Qualidade estimada da conexão com cada amigo. */
+export type Quality = "good" | "fair" | "poor";
+
+/** Perfis de qualidade aplicados automaticamente quando a rede piora. */
+const LEVELS = [
+  { video: 2_500_000, screen: 8_000_000, fps: 60, scale: 1, audio: 40_000 },
+  { video: 900_000, screen: 3_000_000, fps: 30, scale: 1.5, audio: 32_000 },
+  { video: 350_000, screen: 1_200_000, fps: 20, scale: 2, audio: 24_000 },
+  { video: 150_000, screen: 600_000, fps: 12, scale: 3, audio: 16_000 },
+] as const;
+
 interface Signal {
   to: string;
   from: string;
@@ -122,8 +133,9 @@ export class VoiceClient {
         if (status === "SUBSCRIBED") {
           setState({ connected: true });
           await this.publishPresence();
-        } else if (status === "CLOSED" || status === "CHANNEL_ERROR") {
+        } else if (status === "CLOSED" || status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
           setState({ connected: false });
+          this.scheduleReconnect();
         }
       });
 
@@ -251,7 +263,16 @@ export class VoiceClient {
       this.send({ to: id, from: this.me, candidate: candidate ? candidate.toJSON() : null });
     };
     pc.oniceconnectionstatechange = () => {
-      if (pc.iceConnectionState === "failed") pc.restartIce();
+      const st = pc.iceConnectionState;
+      if (st === "failed") this.revivePeer(id, peer, true);
+      else if (st === "disconnected") {
+        // Dá um instante para a rede voltar sozinha antes de renegociar.
+        window.setTimeout(() => {
+          if (pc.iceConnectionState === "disconnected") this.revivePeer(id, peer, false);
+        }, 2500);
+      } else if (st === "connected" || st === "completed") {
+        peer.restarts = 0;
+      }
     };
     pc.ontrack = (ev) => {
       const stream = ev.streams[0];
