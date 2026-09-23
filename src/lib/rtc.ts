@@ -554,26 +554,116 @@ export class VoiceClient {
     if (changed || Object.keys(s.speaking).length !== Object.keys(next).length) setState({ speaking: next });
   }
 
-  /* ---------------- stats / ping ---------------- */
+  /* ---------------- suporte constante: monitorar e adaptar ---------------- */
+
+  /** Reassina a sala em tempo real com espera progressiva. */
+  private scheduleReconnect() {
+    if (!this.started || this.reconnectTimer) return;
+    this.reconnectAttempt = Math.min(this.reconnectAttempt + 1, 6);
+    const delay = Math.min(15000, 800 * 2 ** (this.reconnectAttempt - 1));
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      if (!this.started || !this.channel) return;
+      try {
+        void this.channel.subscribe();
+      } catch {
+        this.scheduleReconnect();
+      }
+    }, delay);
+  }
+
+  /** Recupera uma conexão P2P instável sem pedir nada ao usuário. */
+  private revivePeer(id: string, peer: Peer, hard: boolean) {
+    if (!this.peers.get(id)) return;
+    const now = Date.now();
+    if (now - peer.lastRestart < 4000) return;
+    peer.lastRestart = now;
+    peer.restarts += 1;
+    // Piora a qualidade preventivamente: voz primeiro, imagem depois.
+    void this.applyLevel(peer, Math.min(LEVELS.length - 1, peer.level + 1));
+    try {
+      peer.pc.restartIce();
+    } catch {
+      /* ignore */
+    }
+    // Se nem o reinício do ICE resolve, refaz a conexão inteira.
+    if (hard && peer.restarts >= 3) {
+      peer.restarts = 0;
+      this.closePeer(id);
+      const member = getState().members[id];
+      if (member && member.channel === getState().myChannel) {
+        this.createPeer(id);
+        this.resolveStreams(id);
+      }
+    }
+  }
+
+  /** Aplica um perfil de qualidade aos envios desta conexão. */
+  private async applyLevel(peer: Peer, level: number) {
+    if (peer.level === level) return;
+    peer.level = level;
+    const prof = LEVELS[level]!;
+    const screen = getState().localScreen;
+    for (const [track, sender] of peer.senders) {
+      try {
+        const p = sender.getParameters();
+        if (!p.encodings?.length) p.encodings = [{}];
+        const enc = p.encodings[0]!;
+        if (track.kind === "audio") {
+          enc.maxBitrate = prof.audio;
+        } else {
+          const isScreen = !!screen && screen.getTracks().includes(track);
+          enc.maxBitrate = isScreen ? prof.screen : prof.video;
+          enc.maxFramerate = isScreen ? prof.fps : Math.min(prof.fps, 30);
+          enc.scaleResolutionDownBy = isScreen ? 1 : prof.scale;
+          p.degradationPreference = isScreen ? "maintain-framerate" : "maintain-framerate";
+        }
+        await sender.setParameters(p);
+      } catch {
+        /* navegador sem suporte */
+      }
+    }
+  }
 
   private async collectStats() {
     if (this.peers.size === 0) return;
     const pings: Record<string, number> = {};
+    const quality: Record<string, Quality> = {};
     await Promise.all(
       [...this.peers.entries()].map(async ([id, p]) => {
         try {
           const report = await p.pc.getStats();
+          let rtt: number | null = null;
+          let lost = 0;
+          let recv = 0;
           report.forEach((r) => {
             if (r.type === "candidate-pair" && (r.nominated || r.selected) && r.currentRoundTripTime != null) {
-              pings[id] = Math.round(r.currentRoundTripTime * 1000);
+              rtt = Math.round(r.currentRoundTripTime * 1000);
+            }
+            if (r.type === "inbound-rtp" && r.kind === "audio") {
+              lost += (r.packetsLost as number) ?? 0;
+              recv += (r.packetsReceived as number) ?? 0;
             }
           });
+          if (rtt != null) pings[id] = rtt;
+          const dLost = Math.max(0, lost - p.lastLost);
+          const dRecv = Math.max(0, recv - p.lastRecv);
+          p.lastLost = lost;
+          p.lastRecv = recv;
+          const loss = dRecv + dLost > 0 ? dLost / (dRecv + dLost) : 0;
+          const bad = loss > 0.07 || (rtt ?? 0) > 260;
+          const soso = loss > 0.02 || (rtt ?? 0) > 150;
+          p.quality = bad ? "poor" : soso ? "fair" : "good";
+          quality[id] = p.quality;
+          // Sobe ou desce um degrau por medição: o ajuste fica suave, sem cortes bruscos.
+          const target = bad ? Math.min(LEVELS.length - 1, p.level + 1) : p.quality === "good" ? Math.max(0, p.level - 1) : p.level;
+          if (target !== p.level) await this.applyLevel(p, target);
         } catch {
           /* ignore */
         }
       }),
     );
-    setState({ pings });
+    setState({ pings, quality });
   }
 
   /* ---------------- mic ---------------- */
