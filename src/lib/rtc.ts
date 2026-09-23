@@ -48,13 +48,19 @@ class Peer {
   streams = new Map<string, MediaStream>();
   senders = new Map<MediaStreamTrack, RTCRtpSender>();
   source: MediaStreamAudioSourceNode | undefined;
-  gain: GainNode | undefined;
   analyser: AnalyserNode | undefined;
-  screenSource: MediaStreamAudioSourceNode | undefined;
-  screenGain: GainNode | undefined;
-  keepAlive: HTMLAudioElement[] = [];
+  /** Áudio remoto toca em <audio> (caminho WebRTC) para o cancelador de eco do navegador agir. */
+  micEl: HTMLAudioElement | undefined;
+  screenEl: HTMLAudioElement | undefined;
   micStreamId: string | null = null;
   screenStreamId: string | null = null;
+  /** Monitoramento adaptativo da conexão. */
+  lastLost = 0;
+  lastRecv = 0;
+  quality: Quality = "good";
+  level = 0; // 0 = qualidade cheia, 3 = mínima (só voz)
+  restarts = 0;
+  lastRestart = 0;
 
   constructor(pc: RTCPeerConnection, polite: boolean) {
     this.pc = pc;
