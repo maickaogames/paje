@@ -923,6 +923,7 @@ export class VoiceClient {
       v.onended = () => void this.stopShare();
     }
     setState({ localScreen: stream, sharing: true });
+    sfx.shareStart();
     stream.getTracks().forEach((t) => this.peers.forEach((p) => this.addTrackTo(p, t, stream)));
     await this.publishPresence();
   }
