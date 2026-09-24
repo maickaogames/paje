@@ -94,7 +94,10 @@ export function Sidebar({ client }: { client: VoiceClient }) {
   return (
     <aside className="w-64 shrink-0 bg-sidebar text-sidebar-foreground flex flex-col border-r border-sidebar-border">
       <header className="h-12 px-4 flex items-center justify-between border-b border-sidebar-border">
-        <span className="font-display font-semibold tracking-tight">LiteVoice</span>
+        <span className="flex items-center gap-2 font-display font-semibold tracking-tight" title="Bem-vindos à tribo Akidauânus!">
+          <img src={logo} alt="" className="h-6 w-6 object-contain" />
+          Pajé
+        </span>
         <span className={cn("flex items-center gap-1 text-xs font-mono", pingTone)} title="Latência média P2P">
           <Activity className="h-3.5 w-3.5" />
           {connected ? (ping == null ? "—" : `${ping} ms`) : "off"}
