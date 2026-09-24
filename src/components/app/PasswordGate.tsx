@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
-import { Headphones, KeyRound, Loader2 } from "lucide-react";
+import { KeyRound, Loader2 } from "lucide-react";
+import logo from "@/assets/paje-logo.png";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { joinGroup } from "@/lib/group.functions";
@@ -30,12 +31,10 @@ export function PasswordGate() {
     <div className="min-h-screen grid place-items-center bg-background px-4">
       <form onSubmit={submit} className="panel w-full max-w-sm p-8 animate-fade-up">
         <div className="flex items-center gap-3 mb-6">
-          <div className="h-11 w-11 rounded-lg bg-primary text-primary-foreground grid place-items-center">
-            <Headphones className="h-6 w-6" />
-          </div>
+          <img src={logo} alt="Pajé" className="h-12 w-12 rounded-lg object-contain" />
           <div>
-            <h1 className="text-xl font-semibold leading-tight">LiteVoice</h1>
-            <p className="text-xs text-muted-foreground">Voz leve para o seu grupo</p>
+            <h1 className="font-display text-xl font-semibold leading-tight">Pajé</h1>
+            <p className="text-xs text-muted-foreground">Bem-vindos à tribo Akidauânus!</p>
           </div>
         </div>
         <label className="text-sm text-muted-foreground mb-2 block">Senha do grupo</label>

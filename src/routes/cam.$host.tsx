@@ -7,9 +7,9 @@ import { PhoneCamClient } from "@/lib/rtc";
 export const Route = createFileRoute("/cam/$host")({
   head: () => ({
     meta: [
-      { title: "Celular como webcam — LiteVoice" },
-      { name: "description", content: "Use a câmera do seu celular como webcam na sala do LiteVoice." },
-      { property: "og:title", content: "Celular como webcam — LiteVoice" },
+      { title: "Celular como webcam — Pajé" },
+      { name: "description", content: "Use a câmera do seu celular como webcam na sala do Pajé." },
+      { property: "og:title", content: "Celular como webcam — Pajé" },
       { property: "og:description", content: "Aponte a câmera e ela aparece na sala de voz no computador." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
@@ -57,7 +57,7 @@ function CamPage() {
     <div className="min-h-screen bg-background text-foreground flex flex-col items-center gap-4 p-4">
       <h1 className="text-lg font-semibold mt-2">Celular como webcam</h1>
       <div className="w-full max-w-sm aspect-[3/4] rounded-xl overflow-hidden bg-tile grid place-items-center">
-        <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-cover" />
+        <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-contain" />
       </div>
       <p className="text-sm text-muted-foreground text-center">{status}</p>
       <div className="flex gap-2">

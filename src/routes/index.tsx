@@ -12,13 +12,13 @@ import { getState, useApp } from "@/lib/store";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "LiteVoice — voz e vídeo leves para o seu grupo" },
+      { title: "Pajé — Bem-vindos à tribo Akidauânus!" },
       {
         name: "description",
         content:
           "Sala de voz, vídeo e transmissão de tela peer-to-peer para jogar com amigos, sem cadastro e com baixo consumo de CPU.",
       },
-      { property: "og:title", content: "LiteVoice — voz e vídeo leves para o seu grupo" },
+      { property: "og:title", content: "Pajé — Bem-vindos à tribo Akidauânus!" },
       {
         property: "og:description",
         content: "Entre com a senha do grupo, escolha um apelido e fale com os amigos direto no navegador.",
