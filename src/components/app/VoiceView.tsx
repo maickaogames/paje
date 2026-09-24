@@ -46,6 +46,7 @@ function Tile({ m, me, client }: { m: Member; me: string; client: VoiceClient })
   const phoneCam = useApp((s) => s.phoneCamConnected);
   const volume = useApp((s) => s.volumes[m.peerId] ?? 1);
   const ping = useApp((s) => s.pings[m.peerId]);
+  const quality = useApp((s) => s.quality[m.peerId]);
   const isMe = m.peerId === me;
   const cam = isMe ? localCam : remote?.cam;
   const hasScreen = isMe ? localSharing : !!remote?.screen;
@@ -59,7 +60,8 @@ function Tile({ m, me, client }: { m: Member; me: string; client: VoiceClient })
       )}
     >
       {cam ? (
-        <Video stream={cam} mirror={isMe && !phoneCam} />
+        // object-contain preserva o enquadramento original da câmera (sem recorte/zoom).
+        <Video stream={cam} mirror={isMe && !phoneCam} className="object-contain" />
       ) : (
         <Avatar src={m.avatar} name={m.nickname} size={88} />
       )}
@@ -68,6 +70,12 @@ function Tile({ m, me, client }: { m: Member; me: string; client: VoiceClient })
         {isMe && <span className="text-muted-foreground">(você)</span>}
         {m.deafened ? <HeadphoneOff className="h-3.5 w-3.5 text-destructive" /> : m.muted ? <MicOff className="h-3.5 w-3.5 text-destructive" /> : null}
         {!isMe && ping != null && <span className="font-mono text-muted-foreground">{ping}ms</span>}
+        {!isMe && quality && quality !== "good" && (
+          <span
+            className={cn("h-1.5 w-1.5 rounded-full", quality === "poor" ? "bg-destructive" : "bg-amber-400")}
+            title={quality === "poor" ? "Conexão ruim — ajustando automaticamente" : "Conexão instável — ajustando"}
+          />
+        )}
       </div>
       {hasScreen && (
         <button
