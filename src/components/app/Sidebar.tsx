@@ -16,6 +16,7 @@ import {
   Volume2,
 } from "lucide-react";
 import { toast } from "sonner";
+import logo from "@/assets/paje-logo.png";
 import { cn } from "@/lib/utils";
 import { VOICE_CHANNELS, setState, useApp, type ChannelId, type Member } from "@/lib/store";
 import type { VoiceClient } from "@/lib/rtc";
