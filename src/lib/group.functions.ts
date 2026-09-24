@@ -22,6 +22,25 @@ export const verifySession = createServerFn({ method: "POST" })
     }
   });
 
+export const listMessages = createServerFn({ method: "POST" })
+  .inputValidator((d) =>
+    z.object({ token: z.string().max(500), since: z.string().max(40).nullable().optional() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    assertToken(data.token);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    let q = supabaseAdmin.from("messages").select("*");
+    if (data.since) {
+      q = q.gt("created_at", data.since).order("created_at", { ascending: true }).limit(200);
+      const { data: rows, error } = await q;
+      if (error) throw new Error("Falha ao carregar mensagens.");
+      return rows ?? [];
+    }
+    const { data: rows, error } = await q.order("created_at", { ascending: false }).limit(200);
+    if (error) throw new Error("Falha ao carregar mensagens.");
+    return (rows ?? []).reverse();
+  });
+
 const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 
 export const sendMessage = createServerFn({ method: "POST" })

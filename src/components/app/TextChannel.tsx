@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/integrations/supabase/client";
-import { sendMessage } from "@/lib/group.functions";
+import { listMessages, sendMessage } from "@/lib/group.functions";
 import { useApp } from "@/lib/store";
 import { Avatar } from "./Avatar";
 
@@ -63,6 +63,7 @@ export function TextChannel() {
   const profile = useApp((s) => s.profile)!;
   const token = useApp((s) => s.token);
   const send = useServerFn(sendMessage);
+  const list = useServerFn(listMessages);
   const [rows, setRows] = useState<Row[]>([]);
   const [text, setText] = useState("");
   const [image, setImage] = useState<File | null>(null);
@@ -71,29 +72,41 @@ export function TextChannel() {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (!token) return;
     let alive = true;
-    void supabase
-      .from("messages")
-      .select("*")
-      .order("created_at", { ascending: true })
-      .limit(200)
-      .then(({ data }) => {
-        if (alive && data) setRows(data as unknown as Row[]);
+    let last: string | null = null;
+    const merge = (incoming: Row[]) => {
+      if (!incoming.length) return;
+      for (const r of incoming) if (!last || r.created_at > last) last = r.created_at;
+      setRows((prev) => {
+        const ids = new Set(prev.map((r) => r.id));
+        const add = incoming.filter((r) => !ids.has(r.id));
+        return add.length ? [...prev, ...add].slice(-300) : prev;
       });
-
+    };
+    const load = async () => {
+      try {
+        const data = (await list({ data: { token, since: last } })) as unknown as Row[];
+        if (alive) merge(data);
+      } catch {
+        /* ignore transient errors */
+      }
+    };
+    void load();
+    // New messages are signalled over broadcast; polling is a light fallback.
     const ch = supabase
-      .channel("messages-feed")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" }, (payload) => {
-        const row = payload.new as unknown as Row;
-        setRows((prev) => (prev.some((r) => r.id === row.id) ? prev : [...prev, row]));
-      })
+      .channel("messages-ping", { config: { broadcast: { self: false } } })
+      .on("broadcast", { event: "new" }, () => void load())
       .subscribe();
-
+    const iv = window.setInterval(() => {
+      if (!document.hidden) void load();
+    }, 15000);
     return () => {
       alive = false;
+      window.clearInterval(iv);
       void supabase.removeChannel(ch);
     };
-  }, []);
+  }, [token, list]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
@@ -123,6 +136,7 @@ export function TextChannel() {
         },
       })) as unknown as Row;
       setRows((prev) => (prev.some((r) => r.id === row.id) ? prev : [...prev, row]));
+      void supabase.channel("messages-ping").send({ type: "broadcast", event: "new", payload: {} });
       setText("");
       setImage(null);
     } catch (err) {
