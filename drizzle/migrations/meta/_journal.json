@@ -15,6 +15,13 @@
       "when": 1790014816128,
       "tag": "0001_lock_down_messages_writes_and_chat_images",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790262747730,
+      "tag": "0002_restrict_messages_select",
+      "breakpoints": true
     }
   ]
 }
