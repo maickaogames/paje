@@ -81,6 +81,8 @@ export interface AppState {
   watching: string | null; // peerId whose screen is focused
   phoneCamConnected: boolean;
   hidden: boolean; // tab hidden → power save
+  voiceStatus: "idle" | "connecting" | "connected" | "reconnecting" | "failed";
+  audioBlocked: boolean; // navegador bloqueou a reprodução automática
 }
 
 /* ---------- Persistence ---------- */
@@ -142,6 +144,8 @@ const defaults: AppState = {
   watching: null,
   phoneCamConnected: false,
   hidden: false,
+  voiceStatus: "idle",
+  audioBlocked: false,
 };
 
 /* ---------- Tiny store ---------- */
