@@ -1,46 +1,39 @@
 /**
- * LiteVoice realtime client.
- * - Presence + broadcast (Lovable Cloud realtime) for signaling only.
- * - WebRTC mesh between members of the same voice channel (P2P media).
- * - Single AudioContext: per-peer gain (local volume), master gain (deafen), analysers (VAD).
+ * Pajé — motor de voz/vídeo.
+ *
+ * Camadas separadas:
+ * - Presença (quem está online e em qual canal): Lovable Cloud realtime (presence + broadcast "move").
+ * - Mídia (voz, câmera, tela): LiveKit (servidor SFU). Cada canal de voz = uma sala LiveKit.
+ *   Cada pessoa envia 1 cópia do seu áudio/vídeo; o servidor distribui. Reconexão automática.
+ * - Celular como webcam: sala LiveKit privada `cam-<peerId>`; o computador recebe e republica no canal.
  */
 import type { RealtimeChannel } from "@supabase/supabase-js";
+import {
+  AudioPresets,
+  ConnectionQuality,
+  DisconnectReason,
+  LocalAudioTrack,
+  type LocalTrackPublication,
+  type Participant,
+  type RemoteParticipant,
+  type RemoteTrack,
+  type RemoteTrackPublication,
+  Room,
+  RoomEvent,
+  Track,
+} from "livekit-client";
+import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { getState, setState, type ChannelId, type Member, type RemoteStreams, VOICE_CHANNELS } from "./store";
 import { sfx } from "./sfx";
+import { getPhoneCamToken, getPhoneHostToken, getVoiceToken } from "./livekit.functions";
 
-const ICE_SERVERS: RTCIceServer[] = [
-  { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
-  // Retransmissão pública gratuita: salva conexões em redes restritivas (CGNAT, Wi-Fi corporativo).
-  {
-    urls: ["turn:openrelay.metered.ca:80", "turn:openrelay.metered.ca:443", "turns:openrelay.metered.ca:443?transport=tcp"],
-    username: "openrelayproject",
-    credential: "openrelayproject",
-  },
-];
-const ROOM = "litevoice-room";
+const PRESENCE_ROOM = "litevoice-room";
+const MAX_RETRIES = 6;
 
-/** Qualidade estimada da conexão com cada amigo. */
 export type Quality = "good" | "fair" | "poor";
 
-/** Perfis de qualidade aplicados automaticamente quando a rede piora. */
-const LEVELS = [
-  { video: 2_500_000, screen: 8_000_000, fps: 60, scale: 1, audio: 40_000 },
-  { video: 900_000, screen: 3_000_000, fps: 30, scale: 1.5, audio: 32_000 },
-  { video: 350_000, screen: 1_200_000, fps: 20, scale: 2, audio: 24_000 },
-  { video: 150_000, screen: 600_000, fps: 12, scale: 3, audio: 16_000 },
-] as const;
-
-interface Signal {
-  to: string;
-  from: string;
-  description?: RTCSessionDescriptionInit;
-  candidate?: RTCIceCandidateInit | null;
-}
-
 interface PresenceEntry {
-  role: "member" | "phonecam";
-  host?: string;
   peerId: string;
   nickname: string;
   avatar: string | null;
@@ -50,55 +43,83 @@ interface PresenceEntry {
   micStream: string | null;
   camStream: string | null;
   screenStream: string | null;
+  /** Momento da última atualização — descarta estados antigos fora de ordem. */
+  at: number;
 }
 
-class Peer {
-  pc: RTCPeerConnection;
-  polite: boolean;
-  makingOffer = false;
-  ignoreOffer = false;
-  streams = new Map<string, MediaStream>();
-  senders = new Map<MediaStreamTrack, RTCRtpSender>();
-  source: MediaStreamAudioSourceNode | undefined;
-  analyser: AnalyserNode | undefined;
-  /** Áudio remoto toca em <audio> (caminho WebRTC) para o cancelador de eco do navegador agir. */
-  micEl: HTMLAudioElement | undefined;
-  screenEl: HTMLAudioElement | undefined;
-  micStreamId: string | null = null;
-  screenStreamId: string | null = null;
-  /** Monitoramento adaptativo da conexão. */
-  lastLost = 0;
-  lastRecv = 0;
-  quality: Quality = "good";
-  level = 0; // 0 = qualidade cheia, 3 = mínima (só voz)
-  restarts = 0;
-  lastRestart = 0;
+/** Faixas recebidas de cada amigo. */
+interface RemoteMedia {
+  mic?: RemoteTrack;
+  micEl?: HTMLMediaElement;
+  cam?: RemoteTrack;
+  screen?: RemoteTrack;
+  screenAudio?: RemoteTrack;
+  screenEl?: HTMLMediaElement;
+}
 
-  constructor(pc: RTCPeerConnection, polite: boolean) {
-    this.pc = pc;
-    this.polite = polite;
+function withTimeout<T>(p: Promise<T>, ms: number, msg: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(msg)), ms);
+    p.then(
+      (v) => (clearTimeout(t), resolve(v)),
+      (e) => (clearTimeout(t), reject(e)),
+    );
+  });
+}
+
+export function micErrorMessage(e: unknown) {
+  const name = (e as { name?: string })?.name;
+  if (name === "NotAllowedError" || name === "SecurityError")
+    return "O navegador bloqueou o microfone. Clique no cadeado da barra de endereço e permita o microfone.";
+  if (name === "NotFoundError" || name === "OverconstrainedError")
+    return "Microfone não encontrado. Ele pode ter sido desconectado — escolha outro nas configurações.";
+  if (name === "NotReadableError" || name === "AbortError")
+    return "O microfone está ocupado por outro programa ou falhou. Feche o outro programa ou escolha outro microfone.";
+  return "Não foi possível abrir o microfone.";
+}
+
+function audioHost() {
+  let el = document.getElementById("paje-audio");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "paje-audio";
+    el.style.display = "none";
+    document.body.appendChild(el);
   }
+  return el;
 }
 
 export class VoiceClient {
   me: string;
-  private channel: RealtimeChannel | null = null;
-  private peers = new Map<string, Peer>();
-  private phonePeer: Peer | null = null;
+  private presence: RealtimeChannel | null = null;
+  private presenceRetry: number | null = null;
+  private presenceAttempt = 0;
+  private lastSeen: Record<string, number> = {};
+
+  private room: Room | null = null;
+  private roomChannel: ChannelId | null = null;
+  private retryTimer: number | null = null;
+  private retries = 0;
+  private remote = new Map<string, RemoteMedia>();
+  private pubs: { mic?: LocalTrackPublication; cam?: LocalTrackPublication; screen?: LocalTrackPublication; screenAudio?: LocalTrackPublication } = {};
+
+  private camRoom: Room | null = null;
+  private camDialogOpen = false;
+
+  // Microfone: bruto → ganho → (enviado, analisador local, monitor)
   private micStream: MediaStream | null = null;
   private rawMicStream: MediaStream | null = null;
   private micGainNode: GainNode | null = null;
   private monitorGain: GainNode | null = null;
   private micDest: MediaStreamAudioDestinationNode | null = null;
-  private ctx: AudioContext | null = null;
-  private master: GainNode | null = null;
-  private localAnalyser: AnalyserNode | null = null;
   private localSource: MediaStreamAudioSourceNode | null = null;
-  private vadTimer: number | null = null;
-  private reconnectTimer: number | null = null;
-  private reconnectAttempt = 0;
-  private statsTimer: number | null = null;
+  private localAnalyser: AnalyserNode | null = null;
+  private ctx: AudioContext | null = null;
   private vadBuf = new Uint8Array(256);
+  private remoteSpeaking = new Set<string>();
+
+  private vadTimer: number | null = null;
+  private statsTimer: number | null = null;
   private started = false;
   private op: Promise<void> = Promise.resolve();
 
@@ -106,60 +127,47 @@ export class VoiceClient {
     this.me = peerId;
   }
 
-  /* ---------------- lifecycle ---------------- */
-
-  /** start/stop are serialized: React remounts must never leave us half-connected. */
-  start() {
-    this.op = this.op.then(() => this.doStart()).catch((e) => console.warn("start failed", e));
+  /** Operações de entrada/saída são serializadas: nunca correm em paralelo. */
+  private queue(fn: () => Promise<void>) {
+    this.op = this.op.then(fn).catch((e) => console.warn("[voice]", e));
     return this.op;
   }
 
+  /* ---------------- ciclo de vida ---------------- */
+
+  start() {
+    return this.queue(() => this.doStart());
+  }
+
   stop() {
-    this.op = this.op.then(() => this.doStop()).catch((e) => console.warn("stop failed", e));
-    return this.op;
+    return this.queue(() => this.doStop());
   }
 
   private async doStart() {
     if (this.started) return;
     this.started = true;
-    this.channel = supabase.channel(ROOM, {
-      config: { presence: { key: this.me }, broadcast: { self: false, ack: false } },
-    });
-    this.channel
-      .on("presence", { event: "sync" }, () => this.onSync())
-      .on("broadcast", { event: "signal" }, ({ payload }) => this.onSignal(payload as Signal))
-      .on("broadcast", { event: "move" }, ({ payload }) => {
-        const p = payload as { target: string; channel: ChannelId };
-        if (p.target === this.me) void this.joinChannel(p.channel);
-      })
-      .subscribe(async (status) => {
-        if (status === "SUBSCRIBED") {
-          setState({ connected: true });
-          await this.publishPresence();
-        } else if (status === "CLOSED" || status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-          setState({ connected: false });
-          this.scheduleReconnect();
-        }
-      });
-
+    this.connectPresence();
     document.addEventListener("visibilitychange", this.onVisibility);
+    navigator.mediaDevices?.addEventListener?.("devicechange", this.onDeviceChange);
+    window.addEventListener("online", this.onOnline);
     this.vadTimer = window.setInterval(() => this.runVad(), 100);
     this.statsTimer = window.setInterval(() => void this.collectStats(), 3000);
   }
 
   private async doStop() {
     if (!this.started) return;
+    this.started = false;
     document.removeEventListener("visibilitychange", this.onVisibility);
+    navigator.mediaDevices?.removeEventListener?.("devicechange", this.onDeviceChange);
+    window.removeEventListener("online", this.onOnline);
     if (this.vadTimer) clearInterval(this.vadTimer);
     if (this.statsTimer) clearInterval(this.statsTimer);
-    await this.leaveChannel();
-    this.micStream?.getTracks().forEach((t) => t.stop());
-    this.rawMicStream?.getTracks().forEach((t) => t.stop());
-    this.micStream = null;
-    this.rawMicStream = null;
-    if (this.channel) await supabase.removeChannel(this.channel);
-    this.channel = null;
-    this.started = false;
+    if (this.presenceRetry) clearTimeout(this.presenceRetry);
+    await this.doLeave();
+    await this.closePhoneCam(true);
+    this.releaseMic();
+    if (this.presence) await supabase.removeChannel(this.presence);
+    this.presence = null;
     setState({ connected: false, members: {} });
   }
 
@@ -172,41 +180,88 @@ export class VoiceClient {
     }
   };
 
-  /* ---------------- presence ---------------- */
+  private onOnline = () => {
+    // Rede voltou: reconecta presença e voz imediatamente, sem esperar o próximo intervalo.
+    if (!getState().connected) this.connectPresence();
+    if (getState().myChannel && getState().voiceStatus !== "connected") this.retryVoice();
+  };
+
+  private onDeviceChange = () => {
+    const t = this.rawMicStream?.getAudioTracks()[0];
+    if (t && t.readyState === "ended") void this.recoverMic();
+  };
+
+  /* ---------------- presença ---------------- */
+
+  private connectPresence() {
+    if (!this.started) return;
+    if (this.presence) void supabase.removeChannel(this.presence);
+    const ch = supabase.channel(PRESENCE_ROOM, {
+      config: { presence: { key: this.me }, broadcast: { self: false, ack: false } },
+    });
+    this.presence = ch;
+    ch.on("presence", { event: "sync" }, () => this.onSync())
+      .on("broadcast", { event: "move" }, ({ payload }) => {
+        const p = payload as { target: string; channel: ChannelId };
+        if (p.target === this.me) void this.joinChannel(p.channel);
+      })
+      .subscribe(async (status) => {
+        if (ch !== this.presence) return;
+        if (status === "SUBSCRIBED") {
+          this.presenceAttempt = 0;
+          setState({ connected: true });
+          await this.publishPresence();
+        } else if (status === "CLOSED" || status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          setState({ connected: false });
+          this.schedulePresenceRetry();
+        }
+      });
+  }
+
+  private schedulePresenceRetry() {
+    if (!this.started || this.presenceRetry) return;
+    const delay = Math.min(30_000, 1000 * 2 ** this.presenceAttempt++);
+    this.presenceRetry = window.setTimeout(() => {
+      this.presenceRetry = null;
+      this.connectPresence();
+    }, delay);
+  }
 
   private presencePayload(): PresenceEntry {
     const s = getState();
     return {
-      role: "member",
       peerId: this.me,
       nickname: s.profile?.nickname ?? "?",
       avatar: s.profile?.avatar ?? null,
       channel: s.myChannel,
-      muted: s.muted || s.deafened,
+      muted: s.muted || s.deafened || !this.micStream,
       deafened: s.deafened,
-      micStream: this.micStream?.id ?? null,
-      camStream: s.localCam?.id ?? null,
-      screenStream: s.localScreen?.id ?? null,
+      micStream: this.pubs.mic ? "mic" : null,
+      camStream: s.localCam ? "cam" : null,
+      screenStream: s.localScreen ? "screen" : null,
+      at: Date.now(),
     };
   }
 
   async publishPresence() {
-    if (!this.channel) return;
-    await this.channel.track(this.presencePayload());
+    if (!this.presence || !getState().connected) return;
+    try {
+      await this.presence.track(this.presencePayload());
+    } catch (e) {
+      console.warn("[voice] presence track failed", e);
+    }
   }
 
   private onSync() {
-    if (!this.channel) return;
-    const raw = this.channel.presenceState<PresenceEntry>();
+    if (!this.presence) return;
+    const raw = this.presence.presenceState<PresenceEntry & { role?: string }>();
     const members: Record<string, Member> = {};
-    let phoneOnline = false;
     for (const key of Object.keys(raw)) {
-      const entry = raw[key]?.[0];
+      // Várias abas com o mesmo id: usa a atualização mais recente.
+      const entries = (raw[key] ?? []).filter((e) => e.role !== "phonecam" && e.nickname);
+      const entry = entries.sort((a, b) => (b.at ?? 0) - (a.at ?? 0))[0];
       if (!entry) continue;
-      if (entry.role === "phonecam") {
-        if (entry.host === this.me) phoneOnline = true;
-        continue;
-      }
+      this.lastSeen[key] = entry.at ?? 0;
       members[key] = {
         peerId: key,
         nickname: entry.nickname,
@@ -220,456 +275,346 @@ export class VoiceClient {
       };
     }
     setState({ members });
-    this.reconcilePeers(members);
-    if (!phoneOnline && this.phonePeer) this.dropPhonePeer();
-  }
-
-  private reconcilePeers(members: Record<string, Member>) {
-    const myChannel = getState().myChannel;
-    const wanted = new Set<string>();
-    if (myChannel) {
-      for (const m of Object.values(members)) {
-        if (m.peerId !== this.me && m.channel === myChannel) wanted.add(m.peerId);
-      }
-    }
-    for (const id of [...this.peers.keys()]) {
-      if (!wanted.has(id)) this.closePeer(id);
-    }
-    for (const id of wanted) {
-      if (!this.peers.has(id)) this.createPeer(id);
-      this.resolveStreams(id);
-    }
     const s = getState();
-    if (s.watching && !wanted.has(s.watching)) setState({ watching: null });
+    if (s.watching && !this.remote.get(s.watching)?.screen && s.watching !== this.me) setState({ watching: null });
   }
 
-  /* ---------------- peers ---------------- */
+  /* ---------------- canais de voz (LiveKit) ---------------- */
 
-  private createPeer(id: string, opts: { phone?: boolean } = {}): Peer {
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS, bundlePolicy: "max-bundle" });
-    // Deterministic politeness avoids glare (perfect negotiation).
-    const polite = opts.phone ? true : this.me > id;
-    const peer = new Peer(pc, polite);
+  joinChannel(ch: ChannelId) {
+    return this.queue(() => this.doJoin(ch));
+  }
 
-    pc.onnegotiationneeded = async () => {
+  leaveChannel() {
+    return this.queue(() => this.doLeave());
+  }
+
+  /** Tenta de novo depois de uma falha, sem recarregar a página. */
+  retryVoice() {
+    const ch = getState().myChannel;
+    if (!ch) return;
+    this.retries = 0;
+    void this.queue(() => this.connectRoom(ch));
+  }
+
+  private async doJoin(ch: ChannelId) {
+    const s = getState();
+    if (s.myChannel === ch && this.room) {
+      setState({ view: ch });
+      return;
+    }
+    if (this.room) await this.disconnectRoom();
+    this.ensureCtx();
+    setState({ myChannel: ch, view: ch, watching: null });
+    if (!this.micStream && s.devices.mic !== "none") {
       try {
-        peer.makingOffer = true;
-        await pc.setLocalDescription();
-        this.send({ to: id, from: this.me, description: pc.localDescription! });
+        await this.openMic(s.devices.mic);
       } catch (e) {
-        console.warn("negotiation failed", e);
-      } finally {
-        peer.makingOffer = false;
+        console.warn("[voice] mic", e);
+        toast.error(micErrorMessage(e));
       }
-    };
-    pc.onicecandidate = ({ candidate }) => {
-      this.send({ to: id, from: this.me, candidate: candidate ? candidate.toJSON() : null });
-    };
-    pc.oniceconnectionstatechange = () => {
-      const st = pc.iceConnectionState;
-      if (st === "failed") this.revivePeer(id, peer, true);
-      else if (st === "disconnected") {
-        // Dá um instante para a rede voltar sozinha antes de renegociar.
-        window.setTimeout(() => {
-          if (pc.iceConnectionState === "disconnected") this.revivePeer(id, peer, false);
-        }, 2500);
-      } else if (st === "connected" || st === "completed") {
-        peer.restarts = 0;
+    }
+    const def = VOICE_CHANNELS.find((c) => c.id === ch);
+    if (def?.autoMute && !getState().muted) setState({ muted: true });
+    this.retries = 0;
+    await this.connectRoom(ch);
+    sfx.join();
+    await this.publishPresence();
+  }
+
+  private async doLeave() {
+    const wasIn = !!getState().myChannel;
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    await this.stopShare(false);
+    await this.stopCam(false);
+    await this.disconnectRoom();
+    setState({
+      myChannel: null,
+      view: "text",
+      watching: null,
+      speaking: {},
+      pings: {},
+      quality: {},
+      streams: {},
+      voiceStatus: "idle",
+      audioBlocked: false,
+    });
+    if (wasIn) sfx.leave();
+    await this.publishPresence();
+  }
+
+  private async connectRoom(ch: ChannelId) {
+    if (this.room) await this.disconnectRoom();
+    const s = getState();
+    if (!s.token || !s.profile) return;
+    setState({ voiceStatus: this.retries > 0 ? "reconnecting" : "connecting" });
+
+    const room = new Room({
+      adaptiveStream: false,
+      dynacast: true,
+      webAudioMix: false, // voz remota em <audio>: o cancelador de eco do navegador atua
+      disconnectOnPageLeave: true,
+      stopLocalTrackOnUnpublish: false,
+      audioOutput: { deviceId: s.devices.speaker === "none" || s.devices.speaker === "default" ? "default" : s.devices.speaker },
+      reconnectPolicy: {
+        nextRetryDelayInMs: (ctx) => (ctx.retryCount > 8 ? null : Math.min(8000, 300 * 2 ** ctx.retryCount)),
+      },
+    });
+    this.room = room;
+    this.roomChannel = ch;
+    this.bindRoom(room);
+
+    try {
+      const { url, jwt } = await withTimeout(
+        getVoiceToken({ data: { token: s.token, peerId: this.me, nickname: s.profile.nickname, channel: ch } }),
+        10_000,
+        "Tempo esgotado ao pedir acesso à sala de voz.",
+      );
+      if (this.room !== room) return;
+      await withTimeout(room.connect(url, jwt, { autoSubscribe: true }), 15_000, "Tempo esgotado ao conectar na voz.");
+      if (this.room !== room) return;
+      this.retries = 0;
+      setState({ voiceStatus: "connected", audioBlocked: !room.canPlaybackAudio });
+      room.remoteParticipants.forEach((p) => p.trackPublications.forEach((pub) => pub.track && this.onTrack(pub.track, pub, p)));
+      await this.publishAll();
+    } catch (e) {
+      console.warn("[voice] connect failed", e);
+      if (this.room !== room) return;
+      const msg = e instanceof Error ? e.message : "";
+      if (/Sessão inválida/.test(msg)) {
+        toast.error(msg);
+        setState({ voiceStatus: "failed" });
+        return;
       }
-    };
-    pc.ontrack = (ev) => {
-      const stream = ev.streams[0];
-      if (!stream) return;
-      peer.streams.set(stream.id, stream);
-      stream.onremovetrack = () => {
-        if (stream.getTracks().length === 0) {
-          peer.streams.delete(stream.id);
-          if (opts.phone) this.onPhoneStream(null);
-          else this.resolveStreams(id);
+      this.scheduleRoomRetry(ch);
+    }
+  }
+
+  private scheduleRoomRetry(ch: ChannelId) {
+    if (this.retryTimer || getState().myChannel !== ch) return;
+    if (this.retries >= MAX_RETRIES) {
+      setState({ voiceStatus: "failed" });
+      toast.error("Não foi possível conectar na voz. Verifique sua internet e toque em “Tentar de novo”.");
+      return;
+    }
+    setState({ voiceStatus: "reconnecting" });
+    const delay = Math.min(15_000, 1000 * 2 ** this.retries++);
+    this.retryTimer = window.setTimeout(() => {
+      this.retryTimer = null;
+      if (getState().myChannel === ch) void this.queue(() => this.connectRoom(ch));
+    }, delay);
+  }
+
+  private async disconnectRoom() {
+    const room = this.room;
+    this.room = null;
+    this.roomChannel = null;
+    this.pubs = {};
+    for (const id of [...this.remote.keys()]) this.dropRemote(id);
+    this.remoteSpeaking.clear();
+    if (room) {
+      room.removeAllListeners();
+      await room.disconnect(true).catch(() => {});
+    }
+  }
+
+  private bindRoom(room: Room) {
+    room
+      .on(RoomEvent.TrackSubscribed, (track, pub, p) => this.onTrack(track, pub, p))
+      .on(RoomEvent.TrackUnsubscribed, (track, pub, p) => this.offTrack(track, pub, p))
+      .on(RoomEvent.TrackMuted, () => {})
+      .on(RoomEvent.ParticipantDisconnected, (p) => this.dropRemote(p.identity))
+      .on(RoomEvent.ActiveSpeakersChanged, (speakers: Participant[]) => {
+        this.remoteSpeaking = new Set(speakers.filter((x) => x.identity !== this.me).map((x) => x.identity));
+      })
+      .on(RoomEvent.ConnectionQualityChanged, (q, p) => {
+        const quality: Quality =
+          q === ConnectionQuality.Excellent || q === ConnectionQuality.Good ? "good" : q === ConnectionQuality.Poor ? "fair" : "poor";
+        setState((s) => ({ quality: { ...s.quality, [p.identity]: quality } }));
+      })
+      .on(RoomEvent.Reconnecting, () => {
+        if (this.room === room) setState({ voiceStatus: "reconnecting" });
+      })
+      .on(RoomEvent.Reconnected, () => {
+        if (this.room !== room) return;
+        setState({ voiceStatus: "connected" });
+        sfx.reconnect();
+      })
+      .on(RoomEvent.AudioPlaybackStatusChanged, () => setState({ audioBlocked: !room.canPlaybackAudio }))
+      .on(RoomEvent.Disconnected, (reason) => {
+        if (this.room !== room) return;
+        const ch = this.roomChannel;
+        this.room = null;
+        this.pubs = {};
+        for (const id of [...this.remote.keys()]) this.dropRemote(id);
+        if (reason === DisconnectReason.DUPLICATE_IDENTITY) {
+          setState({ voiceStatus: "failed" });
+          toast.error("Você entrou na voz por outra aba ou aparelho. Esta aba saiu da chamada.");
+          return;
         }
-      };
-      if (opts.phone) this.onPhoneStream(stream);
-      else this.resolveStreams(id);
-    };
-
-    if (!opts.phone) {
-      this.peers.set(id, peer);
-      // Attach whatever we're currently sending.
-      const s = getState();
-      const mic = this.micStream?.getAudioTracks()[0];
-      if (mic && this.micStream) this.addTrackTo(peer, mic, this.micStream);
-      if (s.localCam) s.localCam.getTracks().forEach((t) => this.addTrackTo(peer, t, s.localCam!));
-      if (s.localScreen) s.localScreen.getTracks().forEach((t) => this.addTrackTo(peer, t, s.localScreen!));
-    }
-    return peer;
+        if (reason === DisconnectReason.CLIENT_INITIATED || !ch) return;
+        this.scheduleRoomRetry(ch);
+      });
   }
 
-  private addTrackTo(peer: Peer, track: MediaStreamTrack, stream: MediaStream) {
-    if (peer.senders.has(track)) return;
-    const sender = peer.pc.addTrack(track, stream);
-    peer.senders.set(track, sender);
-    if (track.kind === "video" && stream === getState().localScreen) {
-      void this.tuneScreenSender(sender);
+  /* ---------------- faixas remotas ---------------- */
+
+  private onTrack(track: RemoteTrack, pub: RemoteTrackPublication, p: RemoteParticipant) {
+    const id = p.identity;
+    const r = this.remote.get(id) ?? {};
+    const s = getState();
+    switch (pub.source) {
+      case Track.Source.Microphone: {
+        if (r.mic === track) return;
+        if (r.micEl) r.mic?.detach(r.micEl).forEach((el) => el.remove());
+        r.mic = track;
+        r.micEl = track.attach();
+        r.micEl.muted = s.deafened;
+        audioHost().appendChild(r.micEl);
+        p.setVolume(Math.min(1, s.volumes[id] ?? 1), Track.Source.Microphone);
+        break;
+      }
+      case Track.Source.ScreenShareAudio: {
+        if (r.screenAudio === track) return;
+        if (r.screenEl) r.screenAudio?.detach(r.screenEl).forEach((el) => el.remove());
+        r.screenAudio = track;
+        r.screenEl = track.attach();
+        r.screenEl.muted = s.deafened;
+        audioHost().appendChild(r.screenEl);
+        p.setVolume(Math.min(1, s.screenVolume), Track.Source.ScreenShareAudio);
+        break;
+      }
+      case Track.Source.Camera:
+        r.cam = track;
+        break;
+      case Track.Source.ScreenShare:
+        r.screen = track;
+        break;
+      default:
+        return;
     }
+    this.remote.set(id, r);
+    this.publishStreams(id);
   }
 
-  private removeTrackFrom(peer: Peer, track: MediaStreamTrack) {
-    const sender = peer.senders.get(track);
-    if (!sender) return;
-    try {
-      peer.pc.removeTrack(sender);
-    } catch {
-      /* ignore */
-    }
-    peer.senders.delete(track);
+  private offTrack(track: RemoteTrack, pub: RemoteTrackPublication, p: RemoteParticipant) {
+    const r = this.remote.get(p.identity);
+    if (!r) return;
+    track.detach().forEach((el) => el.remove());
+    if (pub.source === Track.Source.Microphone && r.mic === track) r.mic = r.micEl = undefined;
+    if (pub.source === Track.Source.ScreenShareAudio && r.screenAudio === track) r.screenAudio = r.screenEl = undefined;
+    if (pub.source === Track.Source.Camera && r.cam === track) r.cam = undefined;
+    if (pub.source === Track.Source.ScreenShare && r.screen === track) r.screen = undefined;
+    this.publishStreams(p.identity);
   }
 
-  private async tuneScreenSender(sender: RTCRtpSender) {
-    try {
-      const p = sender.getParameters();
-      if (!p.encodings?.length) p.encodings = [{}];
-      const enc = p.encodings[0]!;
-      enc.maxBitrate = 8_000_000;
-      enc.maxFramerate = 60;
-      p.degradationPreference = "maintain-framerate";
-      await sender.setParameters(p);
-    } catch {
-      /* not supported */
+  private dropRemote(id: string) {
+    const r = this.remote.get(id);
+    if (r) {
+      [r.mic, r.screenAudio].forEach((t) => t?.detach().forEach((el) => el.remove()));
     }
-  }
-
-  private closePeer(id: string) {
-    const peer = this.peers.get(id);
-    if (!peer) return;
-    this.peers.delete(id);
-    this.teardownAudio(peer);
-    peer.pc.onnegotiationneeded = null;
-    peer.pc.ontrack = null;
-    peer.pc.close();
+    this.remote.delete(id);
     setState((s) => {
       const streams = { ...s.streams };
       delete streams[id];
-      const speaking = { ...s.speaking };
-      delete speaking[id];
-      const pings = { ...s.pings };
-      delete pings[id];
-      return { streams, speaking, pings };
+      return { streams, watching: s.watching === id ? null : s.watching };
     });
   }
 
-  /* ---------------- signaling ---------------- */
-
-  private send(msg: Signal) {
-    void this.channel?.send({ type: "broadcast", event: "signal", payload: msg });
+  private publishStreams(id: string) {
+    const r = this.remote.get(id);
+    const prev = getState().streams[id];
+    const same = (ms: MediaStream | undefined, t: RemoteTrack | undefined) =>
+      t ? ms?.getTracks()[0] === t.mediaStreamTrack : !ms;
+    if (prev && same(prev.mic, r?.mic) && same(prev.cam, r?.cam) && same(prev.screen, r?.screen)) return;
+    const next: RemoteStreams = {
+      mic: r?.mic ? new MediaStream([r.mic.mediaStreamTrack]) : undefined,
+      cam: r?.cam ? new MediaStream([r.cam.mediaStreamTrack]) : undefined,
+      screen: r?.screen ? new MediaStream([r.screen.mediaStreamTrack]) : undefined,
+    };
+    setState((s) => ({
+      streams: { ...s.streams, [id]: next },
+      watching: !next.screen && s.watching === id ? null : s.watching,
+    }));
   }
 
-  private async onSignal(msg: Signal) {
-    if (msg.to !== this.me) return;
-    let peer: Peer | undefined;
-    if (msg.from === `${this.me}:cam`) {
-      if (!this.phonePeer) this.phonePeer = this.createPeer(msg.from, { phone: true });
-      peer = this.phonePeer;
-    } else {
-      peer = this.peers.get(msg.from);
-      if (!peer) {
-        const m = getState().members[msg.from];
-        const myCh = getState().myChannel;
-        if (!m || !myCh || m.channel !== myCh) return;
-        peer = this.createPeer(msg.from);
-      }
-    }
-    const { pc } = peer;
-    try {
-      if (msg.description) {
-        const offerCollision =
-          msg.description.type === "offer" && (peer.makingOffer || pc.signalingState !== "stable");
-        peer.ignoreOffer = !peer.polite && offerCollision;
-        if (peer.ignoreOffer) return;
-        await pc.setRemoteDescription(msg.description);
-        if (msg.description.type === "offer") {
-          await pc.setLocalDescription();
-          this.send({ to: msg.from, from: this.me, description: pc.localDescription! });
-        }
-      } else if (msg.candidate !== undefined) {
-        try {
-          await pc.addIceCandidate(msg.candidate ?? undefined);
-        } catch (e) {
-          if (!peer.ignoreOffer) throw e;
-        }
-      }
-    } catch (e) {
-      console.warn("signal error", e);
-    }
+  /** O navegador bloqueou o som automático: liberar com um clique. */
+  async unlockAudio() {
+    await this.room?.startAudio().catch(() => {});
+    void this.ctx?.resume();
+    setState({ audioBlocked: !(this.room?.canPlaybackAudio ?? true) });
   }
 
-  /* ---------------- remote streams / audio graph ---------------- */
+  /* ---------------- volume e saída ---------------- */
 
   private ensureCtx() {
-    if (!this.ctx) {
-      this.ctx = new AudioContext({ latencyHint: "interactive" });
-      this.master = this.ctx.createGain();
-      this.master.connect(this.ctx.destination);
-      this.master.gain.value = getState().deafened ? 0 : 1;
-      void this.applySink();
-    }
+    if (!this.ctx) this.ctx = new AudioContext({ latencyHint: "interactive" });
     if (this.ctx.state === "suspended") void this.ctx.resume();
     return this.ctx;
   }
 
-  /** Direciona a saída para o dispositivo escolhido (cada elemento de áudio remoto). */
   async applySink() {
     const speaker = getState().devices.speaker;
-    const id = speaker === "default" || speaker === "none" ? "" : speaker;
-    const els: HTMLAudioElement[] = [];
-    this.peers.forEach((p) => {
-      if (p.micEl) els.push(p.micEl);
-      if (p.screenEl) els.push(p.screenEl);
-    });
-    for (const el of els) {
-      const sinkable = el as HTMLAudioElement & { setSinkId?: (i: string) => Promise<void> };
-      if (!sinkable.setSinkId) continue;
-      try {
-        await sinkable.setSinkId(id);
-      } catch {
-        /* dispositivo indisponível */
-      }
+    const id = speaker === "default" || speaker === "none" ? "default" : speaker;
+    try {
+      await this.room?.switchActiveDevice("audiooutput", id);
+    } catch {
+      toast.error("Não foi possível usar esse alto-falante.");
     }
-  }
-
-  private resolveStreams(id: string) {
-    const peer = this.peers.get(id);
-    const m = getState().members[id];
-    if (!peer || !m) return;
-    const mic = m.micStream ? peer.streams.get(m.micStream) : undefined;
-    const cam = m.camStream ? peer.streams.get(m.camStream) : undefined;
-    const screen = m.screenStream ? peer.streams.get(m.screenStream) : undefined;
-
-    // Voz remota: toca em <audio> (o cancelador de eco do navegador só atua nesse caminho);
-    // a WebAudio recebe apenas uma derivação para o indicador de fala, sem saída de som.
-    if (mic && peer.micStreamId !== mic.id) {
-      this.detachMicAudio(peer);
-      const ctx = this.ensureCtx();
-      peer.source = ctx.createMediaStreamSource(mic);
-      peer.analyser = ctx.createAnalyser();
-      peer.analyser.fftSize = 256;
-      peer.source.connect(peer.analyser);
-      peer.micEl = this.playEl(mic, getState().volumes[id] ?? 1);
-      peer.micStreamId = mic.id;
-    } else if (!mic && peer.micStreamId) {
-      this.detachMicAudio(peer);
-    }
-
-    // Áudio da transmissão de tela: elemento próprio, com volume independente.
-    const screenAudio = screen?.getAudioTracks().length ? screen : undefined;
-    if (screenAudio && peer.screenStreamId !== screenAudio.id) {
-      this.detachScreenAudio(peer);
-      peer.screenEl = this.playEl(screenAudio, getState().screenVolume);
-      peer.screenStreamId = screenAudio.id;
-    } else if (!screenAudio && peer.screenStreamId) {
-      this.detachScreenAudio(peer);
-    }
-
-    const prev = getState().streams[id];
-    if (prev?.mic !== mic || prev?.cam !== cam || prev?.screen !== screen) {
-      const next: RemoteStreams = { mic, cam, screen };
-      setState((s) => ({ streams: { ...s.streams, [id]: next } }));
-      if (!screen && getState().watching === id) setState({ watching: null });
-    }
-  }
-
-  private playEl(stream: MediaStream, volume: number) {
-    const el = document.createElement("audio");
-    el.srcObject = stream;
-    el.autoplay = true;
-    el.volume = Math.min(1, Math.max(0, volume));
-    el.muted = getState().deafened;
-    void el.play().catch(() => {});
-    void this.applySink();
-    return el;
-  }
-
-  private dropEl(el: HTMLAudioElement | undefined) {
-    if (!el) return;
-    el.pause();
-    el.srcObject = null;
-  }
-
-  private detachMicAudio(peer: Peer) {
-    peer.source?.disconnect();
-    peer.analyser?.disconnect();
-    peer.source = peer.analyser = undefined;
-    this.dropEl(peer.micEl);
-    peer.micEl = undefined;
-    peer.micStreamId = null;
-  }
-
-  private detachScreenAudio(peer: Peer) {
-    this.dropEl(peer.screenEl);
-    peer.screenEl = undefined;
-    peer.screenStreamId = null;
-  }
-
-  private teardownAudio(peer: Peer) {
-    this.detachMicAudio(peer);
-    this.detachScreenAudio(peer);
   }
 
   setVolume(id: string, v: number) {
     setState((s) => ({ volumes: { ...s.volumes, [id]: v } }));
-    const p = this.peers.get(id);
-    if (p?.micEl) p.micEl.volume = Math.min(1, Math.max(0, v));
+    this.room?.remoteParticipants.get(id)?.setVolume(Math.min(1, Math.max(0, v)), Track.Source.Microphone);
   }
 
   setScreenVolume(v: number) {
     setState({ screenVolume: v });
-    this.peers.forEach((p) => {
-      if (p.screenEl) p.screenEl.volume = Math.min(1, Math.max(0, v));
-    });
+    this.room?.remoteParticipants.forEach((p) => p.setVolume(Math.min(1, Math.max(0, v)), Track.Source.ScreenShareAudio));
   }
 
-  /* ---------------- VAD ---------------- */
-
-  private rms(an: AnalyserNode) {
-    an.getByteTimeDomainData(this.vadBuf);
-    let sum = 0;
-    for (let i = 0; i < this.vadBuf.length; i++) {
-      const v = ((this.vadBuf[i] ?? 128) - 128) / 128;
-      sum += v * v;
-    }
-    return Math.sqrt(sum / this.vadBuf.length);
-  }
+  /* ---------------- indicador de fala ---------------- */
 
   private runVad() {
     const s = getState();
     if (!s.myChannel) return;
-    const th = s.settings.vadThreshold;
-    const next: Record<string, boolean> = {};
-    let changed = false;
-    const micOn = this.micSending();
-    const mine = micOn && this.localAnalyser ? this.rms(this.localAnalyser) > th : false;
-    next[this.me] = mine;
-    if (!!s.speaking[this.me] !== mine) changed = true;
-    this.peers.forEach((p, id) => {
-      const v = p.analyser ? this.rms(p.analyser) > th : false;
-      next[id] = v;
-      if (!!s.speaking[id] !== v) changed = true;
-    });
-    if (changed || Object.keys(s.speaking).length !== Object.keys(next).length) setState({ speaking: next });
-  }
-
-  /* ---------------- suporte constante: monitorar e adaptar ---------------- */
-
-  /** Reassina a sala em tempo real com espera progressiva. */
-  private scheduleReconnect() {
-    if (!this.started || this.reconnectTimer) return;
-    this.reconnectAttempt = Math.min(this.reconnectAttempt + 1, 6);
-    const delay = Math.min(15000, 800 * 2 ** (this.reconnectAttempt - 1));
-    this.reconnectTimer = window.setTimeout(() => {
-      this.reconnectTimer = null;
-      if (!this.started || !this.channel) return;
-      try {
-        void this.channel.subscribe();
-      } catch {
-        this.scheduleReconnect();
+    let mine = false;
+    if (this.micSending() && this.localAnalyser) {
+      this.localAnalyser.getByteTimeDomainData(this.vadBuf);
+      let sum = 0;
+      for (let i = 0; i < this.vadBuf.length; i++) {
+        const v = ((this.vadBuf[i] ?? 128) - 128) / 128;
+        sum += v * v;
       }
-    }, delay);
+      mine = Math.sqrt(sum / this.vadBuf.length) > s.settings.vadThreshold;
+    }
+    const next: Record<string, boolean> = { [this.me]: mine };
+    this.remoteSpeaking.forEach((id) => (next[id] = true));
+    const prevKeys = Object.keys(s.speaking).filter((k) => s.speaking[k]);
+    const nextKeys = Object.keys(next).filter((k) => next[k]);
+    if (prevKeys.length !== nextKeys.length || nextKeys.some((k) => !s.speaking[k])) setState({ speaking: next });
   }
 
-  /** Recupera uma conexão P2P instável sem pedir nada ao usuário. */
-  private revivePeer(id: string, peer: Peer, hard: boolean) {
-    if (!this.peers.get(id)) return;
-    const now = Date.now();
-    if (now - peer.lastRestart < 4000) return;
-    peer.lastRestart = now;
-    peer.restarts += 1;
-    // Piora a qualidade preventivamente: voz primeiro, imagem depois.
-    void this.applyLevel(peer, Math.min(LEVELS.length - 1, peer.level + 1));
-    try {
-      peer.pc.restartIce();
-    } catch {
-      /* ignore */
-    }
-    // Se nem o reinício do ICE resolve, refaz a conexão inteira.
-    if (hard && peer.restarts >= 3) {
-      peer.restarts = 0;
-      this.closePeer(id);
-      const member = getState().members[id];
-      if (member && member.channel === getState().myChannel) {
-        this.createPeer(id);
-        this.resolveStreams(id);
-      }
-    }
-  }
-
-  /** Aplica um perfil de qualidade aos envios desta conexão. */
-  private async applyLevel(peer: Peer, level: number) {
-    if (peer.level === level) return;
-    peer.level = level;
-    const prof = LEVELS[level]!;
-    const screen = getState().localScreen;
-    for (const [track, sender] of peer.senders) {
-      try {
-        const p = sender.getParameters();
-        if (!p.encodings?.length) p.encodings = [{}];
-        const enc = p.encodings[0]!;
-        if (track.kind === "audio") {
-          enc.maxBitrate = prof.audio;
-        } else {
-          const isScreen = !!screen && screen.getTracks().includes(track);
-          enc.maxBitrate = isScreen ? prof.screen : prof.video;
-          enc.maxFramerate = isScreen ? prof.fps : Math.min(prof.fps, 30);
-          enc.scaleResolutionDownBy = isScreen ? 1 : prof.scale;
-          p.degradationPreference = isScreen ? "maintain-framerate" : "maintain-framerate";
-        }
-        await sender.setParameters(p);
-      } catch {
-        /* navegador sem suporte */
-      }
-    }
-  }
-
+  /** Latência real até o servidor de voz (ida e volta). */
   private async collectStats() {
-    if (this.peers.size === 0) return;
-    const pings: Record<string, number> = {};
-    const quality: Record<string, Quality> = {};
-    await Promise.all(
-      [...this.peers.entries()].map(async ([id, p]) => {
-        try {
-          const report = await p.pc.getStats();
-          let rtt: number | null = null;
-          let lost = 0;
-          let recv = 0;
-          report.forEach((r) => {
-            if (r.type === "candidate-pair" && (r.nominated || r.selected) && r.currentRoundTripTime != null) {
-              rtt = Math.round(r.currentRoundTripTime * 1000);
-            }
-            if (r.type === "inbound-rtp" && r.kind === "audio") {
-              lost += (r.packetsLost as number) ?? 0;
-              recv += (r.packetsReceived as number) ?? 0;
-            }
-          });
-          if (rtt != null) pings[id] = rtt;
-          const dLost = Math.max(0, lost - p.lastLost);
-          const dRecv = Math.max(0, recv - p.lastRecv);
-          p.lastLost = lost;
-          p.lastRecv = recv;
-          const loss = dRecv + dLost > 0 ? dLost / (dRecv + dLost) : 0;
-          const bad = loss > 0.07 || (rtt ?? 0) > 260;
-          const soso = loss > 0.02 || (rtt ?? 0) > 150;
-          p.quality = bad ? "poor" : soso ? "fair" : "good";
-          quality[id] = p.quality;
-          // Sobe ou desce um degrau por medição: o ajuste fica suave, sem cortes bruscos.
-          const target = bad ? Math.min(LEVELS.length - 1, p.level + 1) : p.quality === "good" ? Math.max(0, p.level - 1) : p.level;
-          if (target !== p.level) await this.applyLevel(p, target);
-        } catch {
-          /* ignore */
-        }
-      }),
-    );
-    setState({ pings, quality });
+    const room = this.room;
+    if (!room || getState().voiceStatus !== "connected") return;
+    const track = this.pubs.mic?.track ?? this.pubs.cam?.track;
+    let rtt: number | undefined;
+    try {
+      if (track instanceof LocalAudioTrack) rtt = (await track.getSenderStats())?.roundTripTime;
+    } catch {
+      /* sem estatística */
+    }
+    if (rtt == null) rtt = (room.engine as unknown as { client?: { rtt?: number } }).client?.rtt;
+    if (rtt != null && rtt > 0) {
+      const ms = Math.round(rtt > 5 ? rtt : rtt * 1000);
+      setState((s) => ({ pings: { ...s.pings, [this.me]: ms } }));
+    }
   }
 
-  /* ---------------- mic ---------------- */
+  /* ---------------- microfone ---------------- */
 
   private micSending() {
     const s = getState();
@@ -681,43 +626,47 @@ export class VoiceClient {
 
   applyMicEnabled() {
     const on = this.micSending();
-    this.micStream?.getAudioTracks().forEach((t) => (t.enabled = on));
+    const pub = this.pubs.mic;
+    if (pub) void (on ? pub.unmute() : pub.mute()).catch(() => {});
+    else this.micStream?.getAudioTracks().forEach((t) => (t.enabled = on));
   }
 
-  /** Ganho (sensibilidade) e monitoramento local, sem reabrir o microfone. */
   applyMicTuning() {
     const s = getState().settings;
     if (this.micGainNode) this.micGainNode.gain.value = s.micGain;
     if (this.monitorGain) this.monitorGain.gain.value = s.micMonitor ? 1 : 0;
   }
 
-  /** Reabre o microfone para aplicar o supressor de ruído. */
   async reopenMic() {
     const d = getState().devices.mic;
     if (d === "none" || !this.rawMicStream) return;
     await this.setMic(d);
   }
 
-  async setMic(deviceId: string) {
-    const old = this.micStream;
-    const oldRaw = this.rawMicStream;
-    if (deviceId === "none") {
-      if (old) {
-        old.getTracks().forEach((t) => {
-          this.peers.forEach((p) => this.removeTrackFrom(p, t));
-          t.stop();
-        });
-      }
-      oldRaw?.getTracks().forEach((t) => t.stop());
-      this.micStream = this.rawMicStream = null;
-      this.localSource?.disconnect();
-      this.micGainNode?.disconnect();
-      this.monitorGain?.disconnect();
-      this.localSource = this.localAnalyser = null;
-      this.micGainNode = this.monitorGain = this.micDest = null;
-      await this.publishPresence();
-      return;
+  private async recoverMic() {
+    toast.error("O microfone foi desconectado. Tentando o microfone padrão…");
+    try {
+      await this.setMic("default");
+      toast.success("Microfone padrão conectado.");
+    } catch (e) {
+      toast.error(micErrorMessage(e));
+      await this.setMic("none");
     }
+  }
+
+  private releaseMic() {
+    this.micStream?.getTracks().forEach((t) => t.stop());
+    this.rawMicStream?.getTracks().forEach((t) => t.stop());
+    this.localSource?.disconnect();
+    this.micGainNode?.disconnect();
+    this.monitorGain?.disconnect();
+    this.micStream = this.rawMicStream = null;
+    this.localSource = this.localAnalyser = null;
+    this.micGainNode = this.monitorGain = this.micDest = null;
+  }
+
+  /** Abre o microfone e só troca o antigo depois que o novo funcionou. */
+  private async openMic(deviceId: string) {
     const st = getState().settings;
     const constraints: MediaTrackConstraints = {
       echoCancellation: true,
@@ -726,13 +675,18 @@ export class VoiceClient {
       channelCount: 1,
     };
     if (deviceId !== "default") constraints.deviceId = { exact: deviceId };
-    const raw = await navigator.mediaDevices.getUserMedia({ audio: constraints });
+    const raw = await withTimeout(
+      navigator.mediaDevices.getUserMedia({ audio: constraints }),
+      15_000,
+      "O microfone não respondeu.",
+    );
+    raw.getAudioTracks()[0]?.addEventListener("ended", () => {
+      if (this.rawMicStream === raw) void this.recoverMic();
+    });
 
-    // Cadeia: microfone → ganho → (destino enviado aos amigos, analisador de fala, monitor)
+    const oldPubTrack = this.pubs.mic?.track;
+    this.releaseMic();
     const ctx = this.ensureCtx();
-    this.localSource?.disconnect();
-    this.micGainNode?.disconnect();
-    this.monitorGain?.disconnect();
     this.localSource = ctx.createMediaStreamSource(raw);
     this.micGainNode = ctx.createGain();
     this.localAnalyser = ctx.createAnalyser();
@@ -744,27 +698,53 @@ export class VoiceClient {
     this.micGainNode.connect(this.micDest);
     this.micGainNode.connect(this.monitorGain).connect(ctx.destination);
     this.applyMicTuning();
-
-    const stream = this.micDest.stream;
-    const track = stream.getAudioTracks()[0]!;
-    const oldTrack = old?.getAudioTracks()[0];
-    this.micStream = stream;
+    this.micStream = this.micDest.stream;
     this.rawMicStream = raw;
-    if (oldRaw && oldRaw !== raw) oldRaw.getTracks().forEach((t) => t.stop());
 
-    this.peers.forEach((p) => {
-      const sender = oldTrack ? p.senders.get(oldTrack) : undefined;
-      if (sender) {
-        void sender.replaceTrack(track);
-        p.senders.delete(oldTrack!);
-        p.senders.set(track, sender);
-      } else {
-        this.addTrackTo(p, track, stream);
-      }
-    });
-    oldTrack?.stop();
+    // Já na chamada: troca a faixa enviada sem renegociar.
+    const track = this.micStream.getAudioTracks()[0]!;
+    if (oldPubTrack && this.pubs.mic) {
+      await oldPubTrack.replaceTrack(track, { userProvidedTrack: true });
+    }
+  }
+
+  async setMic(deviceId: string) {
+    if (deviceId === "none") {
+      if (this.pubs.mic?.track && this.room) await this.room.localParticipant.unpublishTrack(this.pubs.mic.track, false);
+      this.pubs.mic = undefined;
+      this.releaseMic();
+      await this.publishPresence();
+      return;
+    }
+    await this.openMic(deviceId);
+    if (this.room && !this.pubs.mic) await this.publishMic();
     this.applyMicEnabled();
     await this.publishPresence();
+  }
+
+  private async publishMic() {
+    const track = this.micStream?.getAudioTracks()[0];
+    if (!this.room || !track || this.pubs.mic) return;
+    this.pubs.mic = await this.room.localParticipant.publishTrack(track, {
+      source: Track.Source.Microphone,
+      name: "mic",
+      dtx: true,
+      red: true,
+      audioPreset: AudioPresets.speech,
+    });
+    this.applyMicEnabled();
+  }
+
+  /** Publica tudo que já está ligado (após entrar ou reconectar). */
+  private async publishAll() {
+    const s = getState();
+    try {
+      await this.publishMic();
+    } catch (e) {
+      console.warn("[voice] publish mic", e);
+    }
+    if (s.localCam) await this.publishCam(s.localCam).catch((e) => console.warn("[voice] publish cam", e));
+    if (s.localScreen) await this.publishScreen(s.localScreen).catch((e) => console.warn("[voice] publish screen", e));
   }
 
   async setMuted(v: boolean) {
@@ -777,10 +757,9 @@ export class VoiceClient {
 
   async setDeafened(v: boolean) {
     setState({ deafened: v });
-    if (this.master) this.master.gain.value = v ? 0 : 1;
-    this.peers.forEach((p) => {
-      if (p.micEl) p.micEl.muted = v;
-      if (p.screenEl) p.screenEl.muted = v;
+    this.remote.forEach((r) => {
+      if (r.micEl) r.micEl.muted = v;
+      if (r.screenEl) r.screenEl.muted = v;
     });
     this.applyMicEnabled();
     if (v) sfx.deafen();
@@ -794,49 +773,12 @@ export class VoiceClient {
     this.applyMicEnabled();
   }
 
-  /* ---------------- channels ---------------- */
-
-  async joinChannel(ch: ChannelId) {
-    const s = getState();
-    if (s.myChannel === ch) {
-      setState({ view: ch });
-      return;
-    }
-    this.ensureCtx();
-    setState({ myChannel: ch, view: ch, watching: null });
-    if (!this.micStream && s.devices.mic !== "none") {
-      try {
-        await this.setMic(s.devices.mic);
-      } catch (e) {
-        console.warn("mic unavailable", e);
-      }
-    }
-    sfx.join();
-    const def = VOICE_CHANNELS.find((c) => c.id === ch);
-    if (def?.autoMute && !getState().muted) {
-      setState({ muted: true });
-      this.applyMicEnabled();
-    }
-    await this.publishPresence();
-    this.reconcilePeers(getState().members);
-  }
-
-  async leaveChannel() {
-    const wasIn = !!getState().myChannel;
-    for (const id of [...this.peers.keys()]) this.closePeer(id);
-    await this.stopShare(false);
-    await this.stopCam(false);
-    setState({ myChannel: null, view: "text", watching: null, speaking: {}, pings: {}, quality: {} });
-    if (wasIn) sfx.leave();
-    await this.publishPresence();
-  }
-
   moveMember(target: string, channel: ChannelId) {
     if (target === this.me) return void this.joinChannel(channel);
-    void this.channel?.send({ type: "broadcast", event: "move", payload: { target, channel } });
+    void this.presence?.send({ type: "broadcast", event: "move", payload: { target, channel } });
   }
 
-  /* ---------------- camera ---------------- */
+  /* ---------------- câmera ---------------- */
 
   async startCam(deviceId: string) {
     if (deviceId === "none") return;
@@ -850,20 +792,33 @@ export class VoiceClient {
     await this.setLocalCam(stream, false);
   }
 
+  private async publishCam(stream: MediaStream) {
+    const t = stream.getVideoTracks()[0];
+    if (!this.room || !t || this.pubs.cam) return;
+    this.pubs.cam = await this.room.localParticipant.publishTrack(t, {
+      source: Track.Source.Camera,
+      name: "cam",
+      simulcast: true,
+      videoEncoding: { maxBitrate: 900_000, maxFramerate: 24 },
+    });
+  }
+
+  private async unpublishCam() {
+    const t = this.pubs.cam?.track;
+    this.pubs.cam = undefined;
+    if (t && this.room) await this.room.localParticipant.unpublishTrack(t, false).catch(() => {});
+  }
+
   private async setLocalCam(stream: MediaStream | null, fromPhone: boolean) {
     const prev = getState().localCam;
     if (prev && prev !== stream) {
-      prev.getTracks().forEach((t) => {
-        this.peers.forEach((p) => this.removeTrackFrom(p, t));
-        if (!getState().phoneCamConnected) t.stop();
-      });
+      await this.unpublishCam();
+      if (!getState().phoneCamConnected) prev.getTracks().forEach((t) => t.stop());
     }
     setState({ localCam: stream, camOn: !!stream, phoneCamConnected: fromPhone && !!stream });
     if (stream) {
-      stream.getTracks().forEach((t) => {
-        t.onended = () => void this.stopCam();
-        this.peers.forEach((p) => this.addTrackTo(p, t, stream));
-      });
+      stream.getVideoTracks().forEach((t) => (t.onended = () => void this.stopCam()));
+      await this.publishCam(stream).catch((e) => console.warn("[voice] publish cam", e));
     }
     await this.publishPresence();
   }
@@ -871,49 +826,63 @@ export class VoiceClient {
   async stopCam(publish = true) {
     const s = getState();
     if (!s.localCam) return;
-    const wasPhone = s.phoneCamConnected;
-    s.localCam.getTracks().forEach((t) => {
-      this.peers.forEach((p) => this.removeTrackFrom(p, t));
-      if (!wasPhone) t.stop();
-    });
+    await this.unpublishCam();
+    if (!s.phoneCamConnected) s.localCam.getTracks().forEach((t) => t.stop());
     setState({ localCam: null, camOn: false, phoneCamConnected: false });
     if (publish) await this.publishPresence();
   }
 
-  /* ---------------- phone camera ---------------- */
+  /* ---------------- celular como webcam ---------------- */
 
-  private onPhoneStream(stream: MediaStream | null) {
-    if (!stream) {
-      if (getState().phoneCamConnected) void this.stopCam();
-      return;
+  /** Abre a sala privada da câmera do celular e devolve o link para o QR. */
+  async openPhoneCam(): Promise<string> {
+    this.camDialogOpen = true;
+    const s = getState();
+    if (!s.token) throw new Error("Sessão inválida.");
+    const { url, jwt, phoneKey } = await getPhoneHostToken({ data: { token: s.token, peerId: this.me } });
+    if (!this.camRoom) {
+      const room = new Room({ adaptiveStream: false, dynacast: false, disconnectOnPageLeave: true });
+      room
+        .on(RoomEvent.TrackSubscribed, (track) => {
+          if (track.kind !== Track.Kind.Video) return;
+          // Faixa do celular embrulhada num fluxo local estável e republicada no canal de voz.
+          void this.setLocalCam(new MediaStream([track.mediaStreamTrack]), true);
+        })
+        .on(RoomEvent.TrackUnsubscribed, () => {
+          if (getState().phoneCamConnected) void this.stopCam();
+        })
+        .on(RoomEvent.ParticipantDisconnected, () => {
+          if (getState().phoneCamConnected) void this.stopCam();
+          if (!this.camDialogOpen) void this.closePhoneCam();
+        });
+      this.camRoom = room;
+      await room.connect(url, jwt, { autoSubscribe: true });
     }
-    // Wrap the remote track in a fresh local stream so peers see a stable id.
-    const wrapped = new MediaStream(stream.getVideoTracks());
-    void this.setLocalCam(wrapped, true);
+    return `${window.location.origin}/cam/${this.me}?k=${encodeURIComponent(phoneKey)}`;
   }
 
-  private dropPhonePeer() {
-    if (!this.phonePeer) return;
-    this.phonePeer.pc.close();
-    this.phonePeer = null;
-    if (getState().phoneCamConnected) void this.stopCam();
+  /** Fecha a sala do celular quando ninguém mais precisa dela (economiza conexão). */
+  async closePhoneCam(force = false) {
+    this.camDialogOpen = false;
+    if (!this.camRoom) return;
+    if (!force && getState().phoneCamConnected) return;
+    const r = this.camRoom;
+    this.camRoom = null;
+    r.removeAllListeners();
+    await r.disconnect(true).catch(() => {});
+    if (getState().phoneCamConnected) await this.stopCam();
   }
 
-  /* ---------------- screen share ---------------- */
+  /* ---------------- transmissão de tela ---------------- */
 
   async startShare() {
-    // `systemAudio: "exclude"` + `displaySurface: "window"` fazem o navegador oferecer
-    // as janelas dos programas abertos e só o áudio daquilo que for escolhido,
-    // em vez do som do sistema inteiro.
+    // O seletor nativo do navegador lista telas, janelas e abas. Áudio:
+    // aba do navegador → só o som da aba; tela inteira (Windows/ChromeOS) → som do sistema;
+    // janela de programa → sem áudio (limitação do navegador).
     const stream = await navigator.mediaDevices.getDisplayMedia({
-      video: {
-        displaySurface: "window",
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-        frameRate: { ideal: 60, max: 60 },
-      },
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-      systemAudio: "exclude",
+      video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60, max: 60 } },
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false },
+      systemAudio: "include",
       selfBrowserSurface: "exclude",
       surfaceSwitching: "include",
     } as DisplayMediaStreamOptions);
@@ -924,114 +893,102 @@ export class VoiceClient {
     }
     setState({ localScreen: stream, sharing: true });
     sfx.shareStart();
-    stream.getTracks().forEach((t) => this.peers.forEach((p) => this.addTrackTo(p, t, stream)));
+    await this.publishScreen(stream).catch((e) => {
+      console.warn("[voice] publish screen", e);
+      toast.error("Não foi possível enviar a transmissão.");
+    });
     await this.publishPresence();
+  }
+
+  private async publishScreen(stream: MediaStream) {
+    if (!this.room) return;
+    const v = stream.getVideoTracks()[0];
+    const a = stream.getAudioTracks()[0];
+    if (v && !this.pubs.screen) {
+      this.pubs.screen = await this.room.localParticipant.publishTrack(v, {
+        source: Track.Source.ScreenShare,
+        name: "screen",
+        simulcast: false,
+        videoCodec: "h264", // codificação por hardware na maioria dos PCs
+        degradationPreference: "maintain-framerate",
+        screenShareEncoding: { maxBitrate: 6_000_000, maxFramerate: 60 },
+        videoEncoding: { maxBitrate: 6_000_000, maxFramerate: 60 },
+      });
+    }
+    if (a && !this.pubs.screenAudio) {
+      this.pubs.screenAudio = await this.room.localParticipant.publishTrack(a, {
+        source: Track.Source.ScreenShareAudio,
+        name: "screen-audio",
+        dtx: false,
+        red: false,
+        audioPreset: { maxBitrate: 96_000 },
+      });
+    }
   }
 
   async stopShare(publish = true) {
     const s = getState();
     if (!s.localScreen) return;
-    s.localScreen.getTracks().forEach((t) => {
-      this.peers.forEach((p) => this.removeTrackFrom(p, t));
-      t.stop();
-    });
+    const lp = this.room?.localParticipant;
+    for (const key of ["screen", "screenAudio"] as const) {
+      const t = this.pubs[key]?.track;
+      this.pubs[key] = undefined;
+      if (t && lp) await lp.unpublishTrack(t, false).catch(() => {});
+    }
+    s.localScreen.getTracks().forEach((t) => t.stop());
     setState({ localScreen: null, sharing: false });
     sfx.shareStop();
     if (publish) await this.publishPresence();
   }
 }
 
-/* ---------------- Phone camera source (runs on the smartphone) ---------------- */
+/* ---------------- Celular (roda no smartphone) ---------------- */
 
 export class PhoneCamClient {
   private host: string;
-  private me: string;
-  private channel: RealtimeChannel | null = null;
-  private pc: RTCPeerConnection | null = null;
+  private key: string;
+  private room: Room | null = null;
   private stream: MediaStream | null = null;
-  private makingOffer = false;
   onState: (s: string) => void = () => {};
 
-  constructor(host: string) {
+  constructor(host: string, key: string) {
     this.host = host;
-    this.me = `${host}:cam`;
+    this.key = key;
   }
 
   async start(facing: "environment" | "user" = "environment") {
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      // Sem pedir resolução: o celular escolhe a câmera padrão, sem recorte/zoom.
-      video: { facingMode: facing },
-      audio: false,
-    });
-    // Garante zoom no mínimo (padrão do telefone) quando a câmera expõe esse controle.
-    const vt = this.stream.getVideoTracks()[0];
-    const caps = (vt?.getCapabilities?.() ?? {}) as { zoom?: { min?: number } };
-    if (vt && caps.zoom?.min != null) {
-      try {
-        await vt.applyConstraints({ advanced: [{ zoom: caps.zoom.min }] } as unknown as MediaTrackConstraints);
-      } catch {
-        /* ignore */
-      }
+    // Sem pedir resolução: o celular usa a câmera padrão, sem recorte/zoom.
+    this.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing }, audio: false });
+    const vt = this.stream.getVideoTracks()[0]!;
+    const caps = (vt.getCapabilities?.() ?? {}) as { zoom?: { min?: number } };
+    if (caps.zoom?.min != null) {
+      await vt.applyConstraints({ advanced: [{ zoom: caps.zoom.min }] } as unknown as MediaTrackConstraints).catch(() => {});
     }
-    this.channel = supabase.channel(ROOM, {
-      config: { presence: { key: this.me }, broadcast: { self: false, ack: false } },
+    this.onState("connecting");
+    const { url, jwt } = await getPhoneCamToken({ data: { key: this.key, host: this.host } });
+    const room = new Room({ adaptiveStream: false, dynacast: true, disconnectOnPageLeave: true, stopLocalTrackOnUnpublish: true });
+    this.room = room;
+    room
+      .on(RoomEvent.ParticipantConnected, () => this.onState("connected"))
+      .on(RoomEvent.ParticipantDisconnected, () => this.onState("waiting"))
+      .on(RoomEvent.Reconnecting, () => this.onState("connecting"))
+      .on(RoomEvent.Reconnected, () => this.onState(room.remoteParticipants.size ? "connected" : "waiting"))
+      .on(RoomEvent.Disconnected, () => this.onState("disconnected"));
+    await room.connect(url, jwt);
+    await room.localParticipant.publishTrack(vt, {
+      source: Track.Source.Camera,
+      simulcast: false,
+      videoEncoding: { maxBitrate: 1_500_000, maxFramerate: 30 },
     });
-    this.channel
-      .on("broadcast", { event: "signal" }, ({ payload }) => void this.onSignal(payload as Signal))
-      .subscribe(async (status) => {
-        if (status === "SUBSCRIBED") {
-          await this.channel!.track({ role: "phonecam", host: this.host, peerId: this.me });
-          this.connect();
-        }
-      });
+    this.onState(room.remoteParticipants.size ? "connected" : "waiting");
     return this.stream;
   }
 
-  private connect() {
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    this.pc = pc;
-    pc.onnegotiationneeded = async () => {
-      try {
-        this.makingOffer = true;
-        await pc.setLocalDescription();
-        this.send({ to: this.host, from: this.me, description: pc.localDescription! });
-      } finally {
-        this.makingOffer = false;
-      }
-    };
-    pc.onicecandidate = ({ candidate }) =>
-      this.send({ to: this.host, from: this.me, candidate: candidate ? candidate.toJSON() : null });
-    pc.onconnectionstatechange = () => this.onState(pc.connectionState);
-    this.stream!.getTracks().forEach((t) => pc.addTrack(t, this.stream!));
-  }
-
-  private send(msg: Signal) {
-    void this.channel?.send({ type: "broadcast", event: "signal", payload: msg });
-  }
-
-  private async onSignal(msg: Signal) {
-    if (msg.to !== this.me || !this.pc) return;
-    try {
-      if (msg.description) {
-        // Phone is impolite: ignore colliding offers.
-        if (msg.description.type === "offer" && (this.makingOffer || this.pc.signalingState !== "stable")) return;
-        await this.pc.setRemoteDescription(msg.description);
-        if (msg.description.type === "offer") {
-          await this.pc.setLocalDescription();
-          this.send({ to: this.host, from: this.me, description: this.pc.localDescription! });
-        }
-      } else if (msg.candidate !== undefined) {
-        await this.pc.addIceCandidate(msg.candidate ?? undefined);
-      }
-    } catch (e) {
-      console.warn("phone signal error", e);
-    }
-  }
-
   async stop() {
-    this.pc?.close();
+    const r = this.room;
+    this.room = null;
+    await r?.disconnect(true).catch(() => {});
     this.stream?.getTracks().forEach((t) => t.stop());
-    if (this.channel) await supabase.removeChannel(this.channel);
   }
 }
 

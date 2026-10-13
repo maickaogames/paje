@@ -25,6 +25,23 @@ export function assertToken(token: string | null | undefined) {
   }
 }
 
+/** Chave curta (12h) que só permite ao celular publicar a câmera de uma pessoa. */
+export function makeCamKey(host: string) {
+  const secret = process.env["SESSION_SECRET"]!;
+  const exp = Math.floor(Date.now() / 1000) + 12 * 3600;
+  const sig = createHmac("sha256", secret).update(`cam:${host}:${exp}`).digest("hex").slice(0, 32);
+  return `${exp}.${sig}`;
+}
+
+export function assertCamKey(host: string, key: string) {
+  const secret = process.env["SESSION_SECRET"]!;
+  const [expStr, sig] = key.split(".");
+  const exp = Number(expStr);
+  if (!sig || !Number.isFinite(exp) || exp < Date.now() / 1000) throw new Error("Link expirado. Gere um novo QR.");
+  const want = createHmac("sha256", secret).update(`cam:${host}:${exp}`).digest("hex").slice(0, 32);
+  if (!safeEqual(sig, want)) throw new Error("Link inválido.");
+}
+
 export interface LinkPreview {
   url: string;
   title: string | null;
