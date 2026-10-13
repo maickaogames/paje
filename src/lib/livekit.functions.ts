@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { assertToken, makeToken } from "./group.server";
+import { assertCamKey, assertToken, makeCamKey } from "./group.server";
 
 const CHANNELS = ["gameplay-1", "gameplay-2", "afk"] as const;
 
@@ -44,8 +44,8 @@ export const getPhoneHostToken = createServerFn({ method: "POST" })
     const { AccessToken } = await import("livekit-server-sdk");
     const at = new AccessToken(key, secret, { identity: data.peerId, ttl: "6h" });
     at.addGrant({ room: `cam-${data.peerId}`, roomJoin: true, canPublish: false, canSubscribe: true, canPublishData: false });
-    // Link curto para o celular: sessão de grupo nova (o celular não sabe a senha).
-    return { url, jwt: await at.toJwt(), phoneKey: makeToken() };
+    // Chave curta só para a câmera; o celular nunca recebe a sessão do grupo.
+    return { url, jwt: await at.toJwt(), phoneKey: makeCamKey(data.peerId) };
   });
 
 /** Token do celular: só publica câmera na sala privada do dono. */
@@ -54,7 +54,7 @@ export const getPhoneCamToken = createServerFn({ method: "POST" })
     z.object({ key: z.string().max(500), host: z.string().min(1).max(40).regex(/^[a-z0-9]+$/) }).parse(d),
   )
   .handler(async ({ data }) => {
-    assertToken(data.key);
+    assertCamKey(data.host, data.key);
     const { url, key, secret } = env();
     const { AccessToken } = await import("livekit-server-sdk");
     const at = new AccessToken(key, secret, { identity: `${data.host}-cam`, ttl: "6h" });
