@@ -169,6 +169,7 @@ export function VoiceView({ channel, client }: { channel: ChannelId; client: Voi
         <h2 className="font-semibold">{def.name}</h2>
         <span className="text-xs text-muted-foreground">{list.length} na sala</span>
         <span className="flex-1" />
+        {here && <VoiceStatus client={client} />}
         {!here && (
           <Button size="sm" onClick={() => void client.joinChannel(channel)}>
             <LogIn /> Entrar no canal
@@ -200,4 +201,24 @@ export function VoiceView({ channel, client }: { channel: ChannelId; client: Voi
       </div>
     </div>
   );
+}
+
+function VoiceStatus({ client }: { client: VoiceClient }) {
+  const status = useApp((s) => s.voiceStatus);
+  const blocked = useApp((s) => s.audioBlocked);
+  if (blocked)
+    return (
+      <Button size="sm" variant="secondary" onClick={() => void client.unlockAudio()}>
+        Ativar som
+      </Button>
+    );
+  if (status === "connecting") return <span className="text-xs text-muted-foreground">Conectando à voz…</span>;
+  if (status === "reconnecting") return <span className="text-xs text-warning">Reconectando…</span>;
+  if (status === "failed")
+    return (
+      <Button size="sm" variant="destructive" onClick={() => client.retryVoice()}>
+        Tentar de novo
+      </Button>
+    );
+  return null;
 }
