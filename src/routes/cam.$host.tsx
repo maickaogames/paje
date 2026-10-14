@@ -16,11 +16,13 @@ export const Route = createFileRoute("/cam/$host")({
       { name: "robots", content: "noindex" },
     ],
   }),
+  validateSearch: (s: Record<string, unknown>) => ({ k: typeof s["k"] === "string" ? (s["k"] as string) : "" }),
   component: CamPage,
 });
 
 function CamPage() {
   const { host } = Route.useParams();
+  const { k } = Route.useSearch();
   const videoRef = useRef<HTMLVideoElement>(null);
   const clientRef = useRef<PhoneCamClient | null>(null);
   const [facing, setFacing] = useState<"environment" | "user">("environment");
@@ -37,19 +39,25 @@ function CamPage() {
   async function start(next: "environment" | "user" = facing) {
     try {
       await clientRef.current?.stop();
-      const c = new PhoneCamClient(host);
+      const c = new PhoneCamClient(host, k);
       c.onState = (s) =>
         setStatus(
-          s === "connected" ? "Conectado ao computador." : s === "connecting" ? "Conectando…" : `Conexão: ${s}`,
+          s === "connected"
+            ? "Conectado ao computador."
+            : s === "connecting"
+              ? "Conectando…"
+              : s === "waiting"
+                ? "Aguardando o computador abrir o QR…"
+                : "Desconectado. Toque em virar câmera para reconectar.",
         );
       clientRef.current = c;
       const stream = await c.start(next);
       if (videoRef.current) videoRef.current.srcObject = stream;
       setFacing(next);
       setLive(true);
-      setStatus("Aguardando o computador…");
-    } catch {
-      setStatus("Não foi possível acessar a câmera. Permita o acesso e tente de novo.");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "";
+      setStatus(/Link/.test(msg) ? msg : "Não foi possível acessar a câmera. Permita o acesso e tente de novo.");
     }
   }
 
