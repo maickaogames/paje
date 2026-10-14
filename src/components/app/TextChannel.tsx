@@ -70,6 +70,7 @@ export function TextChannel() {
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const pingRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -97,13 +98,18 @@ export function TextChannel() {
     const ch = supabase
       .channel("messages-ping", { config: { broadcast: { self: false } } })
       .on("broadcast", { event: "new" }, () => void load())
-      .subscribe();
+      // Ao (re)conectar, busca o que chegou durante a queda.
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") void load();
+      });
+    pingRef.current = ch;
     const iv = window.setInterval(() => {
       if (!document.hidden) void load();
     }, 15000);
     return () => {
       alive = false;
       window.clearInterval(iv);
+      pingRef.current = null;
       void supabase.removeChannel(ch);
     };
   }, [token, list]);
@@ -136,7 +142,7 @@ export function TextChannel() {
         },
       })) as unknown as Row;
       setRows((prev) => (prev.some((r) => r.id === row.id) ? prev : [...prev, row]));
-      void supabase.channel("messages-ping").send({ type: "broadcast", event: "new", payload: {} });
+      void pingRef.current?.send({ type: "broadcast", event: "new", payload: {} });
       setText("");
       setImage(null);
     } catch (err) {

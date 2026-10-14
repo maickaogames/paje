@@ -99,7 +99,7 @@ export function Sidebar({ client }: { client: VoiceClient }) {
           <img src={logo} alt="" className="h-6 w-6 object-contain" />
           Pajé
         </span>
-        <span className={cn("flex items-center gap-1 text-xs font-mono", pingTone)} title="Latência média P2P">
+        <span className={cn("flex items-center gap-1 text-xs font-mono", pingTone)} title="Latência até o servidor de voz">
           <Activity className="h-3.5 w-3.5" />
           {connected ? (ping == null ? "—" : `${ping} ms`) : "off"}
         </span>
