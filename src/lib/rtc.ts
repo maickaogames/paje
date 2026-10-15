@@ -881,7 +881,9 @@ export class VoiceClient {
     // janela de programa → sem áudio (limitação do navegador).
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60, max: 60 } },
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false },
+      // Cancelamento de eco remove da transmissão as vozes dos outros participantes
+      // que saem pelos alto-falantes de quem transmite (evita o espectador se ouvir).
+      audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false },
       systemAudio: "include",
       selfBrowserSurface: "exclude",
       surfaceSwitching: "include",
