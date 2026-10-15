@@ -49,12 +49,12 @@ interface PresenceEntry {
 
 /** Faixas recebidas de cada amigo. */
 interface RemoteMedia {
-  mic?: RemoteTrack;
-  micEl?: HTMLMediaElement;
-  cam?: RemoteTrack;
-  screen?: RemoteTrack;
-  screenAudio?: RemoteTrack;
-  screenEl?: HTMLMediaElement;
+  mic?: RemoteTrack | undefined;
+  micEl?: HTMLMediaElement | undefined;
+  cam?: RemoteTrack | undefined;
+  screen?: RemoteTrack | undefined;
+  screenAudio?: RemoteTrack | undefined;
+  screenEl?: HTMLMediaElement | undefined;
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number, msg: string): Promise<T> {
@@ -101,7 +101,7 @@ export class VoiceClient {
   private retryTimer: number | null = null;
   private retries = 0;
   private remote = new Map<string, RemoteMedia>();
-  private pubs: { mic?: LocalTrackPublication; cam?: LocalTrackPublication; screen?: LocalTrackPublication; screenAudio?: LocalTrackPublication } = {};
+  private pubs: { mic?: LocalTrackPublication | undefined; cam?: LocalTrackPublication | undefined; screen?: LocalTrackPublication | undefined; screenAudio?: LocalTrackPublication | undefined } = {};
 
   private camRoom: Room | null = null;
   private camDialogOpen = false;
@@ -372,7 +372,7 @@ export class VoiceClient {
         "Tempo esgotado ao pedir acesso à sala de voz.",
       );
       if (this.room !== room) return;
-      await withTimeout(room.connect(url, jwt, { autoSubscribe: true }), 15_000, "Tempo esgotado ao conectar na voz.");
+      await withTimeout(room.connect(url, jwt, { autoSubscribe: true }), 30_000, "Tempo esgotado ao conectar na voz.");
       if (this.room !== room) return;
       this.retries = 0;
       setState({ voiceStatus: "connected", audioBlocked: !room.canPlaybackAudio });
@@ -467,7 +467,7 @@ export class VoiceClient {
     switch (pub.source) {
       case Track.Source.Microphone: {
         if (r.mic === track) return;
-        if (r.micEl) r.mic?.detach(r.micEl).forEach((el) => el.remove());
+        if (r.micEl) r.mic?.detach(r.micEl).remove();
         r.mic = track;
         r.micEl = track.attach();
         r.micEl.muted = s.deafened;
@@ -477,7 +477,7 @@ export class VoiceClient {
       }
       case Track.Source.ScreenShareAudio: {
         if (r.screenAudio === track) return;
-        if (r.screenEl) r.screenAudio?.detach(r.screenEl).forEach((el) => el.remove());
+        if (r.screenEl) r.screenAudio?.detach(r.screenEl).remove();
         r.screenAudio = track;
         r.screenEl = track.attach();
         r.screenEl.muted = s.deafened;

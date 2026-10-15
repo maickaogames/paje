@@ -25,3 +25,12 @@
 ## Limitações do navegador (não implementáveis aqui)
 - Listar os aplicativos em execução: só o seletor do navegador pode fazê-lo.
 - Overlay sobre o jogo e hotkeys globais fora da janela.
+
+## Estabilização (out/2026)
+- [x] Voz/vídeo/tela migrados para LiveKit (servidor SFU) com tokens emitidos no servidor
+- [x] Reconexão automática (voz e presença) com espera progressiva e botão "Tentar de novo"
+- [x] Aviso "Ativar som" quando o navegador bloqueia áudio
+- [x] Microfone: mensagens de erro claras, recuperação ao desconectar, troca sem cair da chamada
+- [x] Celular como webcam via link assinado de 12h (não expõe a sessão do grupo)
+- [x] Chat: busca mensagens perdidas ao reconectar
+- [ ] Teste real com 3+ pessoas em redes diferentes (precisa de usuários reais)
