@@ -372,7 +372,7 @@ export class VoiceClient {
         "Tempo esgotado ao pedir acesso à sala de voz.",
       );
       if (this.room !== room) return;
-      await withTimeout(room.connect(url, jwt, { autoSubscribe: true }), 15_000, "Tempo esgotado ao conectar na voz.");
+      await withTimeout(room.connect(url, jwt, { autoSubscribe: true }), 30_000, "Tempo esgotado ao conectar na voz.");
       if (this.room !== room) return;
       this.retries = 0;
       setState({ voiceStatus: "connected", audioBlocked: !room.canPlaybackAudio });
