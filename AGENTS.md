@@ -8,3 +8,7 @@
 > Commits you push to the connected branch sync back to Lovable and show up in
 > the editor, so keep the branch in a working state.
 <!-- LOVABLE:END -->
+
+- Keep temporary communication switches and media subscription/capture rules in `src/lib/media-policy.ts`, shared by client and server, so disabled features cannot publish or execute through hidden controls.
+- LiveKit subscribes to cameras in the room and screen tracks only for the selected watcher; screen playback is guarded separately to prevent race-condition audio leaks.
+- Enumerate devices without opening hardware; acquire cameras only on explicit action and clean up failed publication/connection attempts.
