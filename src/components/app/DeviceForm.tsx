@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Camera, Mic, Volume2 } from "lucide-react";
+import { MEDIA_FEATURES } from "@/lib/media-policy";
 import { listDevices, type DeviceLists } from "@/lib/media";
 import type { Devices } from "@/lib/store";
 
@@ -30,7 +31,7 @@ function DeviceSelect({
       >
         <option value="none">Nenhum (desativado)</option>
         {allowDefault && <option value="default">Padrão do sistema</option>}
-        {options.map((d, i) => (
+        {options.filter((d) => d.deviceId).map((d, i) => (
           <option key={d.deviceId || i} value={d.deviceId}>
             {d.label || `${label} ${i + 1}`}
           </option>
@@ -47,23 +48,23 @@ export function DeviceForm({ value, onChange }: { value: Devices; onChange: (d: 
     let alive = true;
     listDevices().then((l) => alive && setLists(l));
     const refresh = () => listDevices().then((l) => alive && setLists(l));
-    navigator.mediaDevices.addEventListener("devicechange", refresh);
+    navigator.mediaDevices?.addEventListener("devicechange", refresh);
     return () => {
       alive = false;
-      navigator.mediaDevices.removeEventListener("devicechange", refresh);
+      navigator.mediaDevices?.removeEventListener("devicechange", refresh);
     };
   }, []);
 
   return (
     <div className="grid gap-4">
-      <DeviceSelect
+      {MEDIA_FEATURES.voice && <DeviceSelect
         icon={<Mic className="h-3.5 w-3.5" />}
         label="Microfone"
         value={value.mic}
         onChange={(mic) => onChange({ ...value, mic })}
         options={lists.mics}
         allowDefault
-      />
+      />}
       <DeviceSelect
         icon={<Volume2 className="h-3.5 w-3.5" />}
         label="Saída de áudio"
@@ -78,7 +79,7 @@ export function DeviceForm({ value, onChange }: { value: Devices; onChange: (d: 
         value={value.cam}
         onChange={(cam) => onChange({ ...value, cam })}
         options={lists.cams}
-        allowDefault={lists.cams.length > 0}
+        allowDefault
       />
     </div>
   );

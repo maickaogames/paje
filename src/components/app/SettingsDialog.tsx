@@ -1,3 +1,6 @@
+import { toast } from "sonner";
+import { MEDIA_FEATURES } from "@/lib/media-policy";
+import { cameraErrorMessage } from "@/lib/media";
 import { useEffect, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
@@ -62,7 +65,7 @@ export function SettingsDialog({
   async function changeDevices(d: typeof devices) {
     const prev = devices;
     setState({ devices: d });
-    if (d.mic !== prev.mic) {
+    if (MEDIA_FEATURES.voice && d.mic !== prev.mic) {
       try {
         await client.setMic(d.mic);
       } catch {
@@ -72,7 +75,7 @@ export function SettingsDialog({
     if (d.speaker !== prev.speaker) await client.applySink();
     if (d.cam !== prev.cam && camOn) {
       await client.stopCam();
-      if (d.cam !== "none") await client.startCam(d.cam).catch(() => {});
+      if (d.cam !== "none") await client.startCam(d.cam).catch((e) => toast.error(cameraErrorMessage(e)));
     }
   }
 
@@ -88,6 +91,7 @@ export function SettingsDialog({
           <DeviceForm value={devices} onChange={(d) => void changeDevices(d)} />
         </section>
 
+        {MEDIA_FEATURES.voice && <>
         <section className="space-y-3 pt-4 border-t">
           <h3 className="text-sm font-semibold">Voz</h3>
           <Row label="Push-to-talk" hint="Só transmite enquanto a tecla estiver pressionada">
@@ -146,9 +150,10 @@ export function SettingsDialog({
           </Row>
         </section>
 
+        </>}
         <section className="space-y-3 pt-4 border-t">
           <h3 className="text-sm font-semibold">Desempenho</h3>
-          <Row label="Modo economia" hint="Pausa vídeos e a webcam quando a aba está em segundo plano">
+          <Row label="Modo economia" hint="Pausa a reprodução dos vídeos quando a aba está em segundo plano">
             <Switch checked={settings.powerSave} onCheckedChange={(powerSave) => patch({ powerSave })} />
           </Row>
         </section>

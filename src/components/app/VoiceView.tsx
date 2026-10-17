@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { HeadphoneOff, LogIn, Maximize2, MicOff, MonitorUp, MonitorX, Volume2 } from "lucide-react";
+import { HeadphoneOff, LogIn, Maximize2, MicOff, MonitorUp, MonitorX, Volume2, Video as VideoIcon } from "lucide-react";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
@@ -39,7 +39,7 @@ function Video({ stream, mirror, className, muted = true }: { stream: MediaStrea
 }
 
 function Tile({ m, me, client }: { m: Member; me: string; client: VoiceClient }) {
-  const speaking = useApp((s) => !!s.speaking[m.peerId]);
+  const speaking = false;
   const remote = useApp((s) => s.streams[m.peerId]);
   const localCam = useApp((s) => s.localCam);
   const localSharing = useApp((s) => s.sharing);
@@ -49,7 +49,7 @@ function Tile({ m, me, client }: { m: Member; me: string; client: VoiceClient })
   const quality = useApp((s) => s.quality[m.peerId]);
   const isMe = m.peerId === me;
   const cam = isMe ? localCam : remote?.cam;
-  const hasScreen = isMe ? localSharing : !!remote?.screen;
+  const hasScreen = isMe ? localSharing : !!m.screenStream;
 
 
   const tile = (
@@ -68,38 +68,26 @@ function Tile({ m, me, client }: { m: Member; me: string; client: VoiceClient })
       <div className="absolute left-2 bottom-2 flex items-center gap-1.5 rounded-md bg-background/70 backdrop-blur px-2 py-1 text-xs">
         <span className="font-medium">{m.nickname}</span>
         {isMe && <span className="text-muted-foreground">(você)</span>}
-        {m.deafened ? <HeadphoneOff className="h-3.5 w-3.5 text-destructive" /> : m.muted ? <MicOff className="h-3.5 w-3.5 text-destructive" /> : null}
         {!isMe && ping != null && <span className="font-mono text-muted-foreground">{ping}ms</span>}
         {!isMe && quality && quality !== "good" && (
           <span
-            className={cn("h-1.5 w-1.5 rounded-full", quality === "poor" ? "bg-destructive" : "bg-amber-400")}
+            className={cn("h-1.5 w-1.5 rounded-full", quality === "poor" ? "bg-destructive" : "bg-warning")}
             title={quality === "poor" ? "Conexão ruim — ajustando automaticamente" : "Conexão instável — ajustando"}
           />
         )}
       </div>
       {hasScreen && (
-        <button
+        <Button size="sm"
           onClick={() => setState({ watching: m.peerId })}
           className="absolute right-2 top-2 flex items-center gap-1 rounded-md bg-primary text-primary-foreground px-2 py-1 text-xs font-semibold hover:bg-primary/90"
         >
-          <MonitorUp className="h-3.5 w-3.5" /> AO VIVO
-        </button>
+          <MonitorUp className="h-3.5 w-3.5" /> Assistir
+        </Button>
       )}
     </div>
   );
 
-  if (isMe) return tile;
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>{tile}</ContextMenuTrigger>
-      <ContextMenuContent className="w-56 p-3">
-        <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
-          <Volume2 className="h-3.5 w-3.5" /> Volume de {m.nickname}: {Math.round(volume * 100)}%
-        </p>
-        <Slider min={0} max={2} step={0.05} value={[volume]} onValueChange={([v]) => client.setVolume(m.peerId, v ?? 1)} />
-      </ContextMenuContent>
-    </ContextMenu>
-  );
+  return tile;
 }
 
 function useAppPhone() {
@@ -121,13 +109,13 @@ function ScreenViewer({ owner, me, client }: { owner: Member; me: string; client
       ) : (
         <div className="h-full grid place-items-center text-muted-foreground text-sm">Conectando à transmissão…</div>
       )}
-      <div className="absolute inset-x-0 bottom-0 p-3 flex items-center gap-3 bg-gradient-to-t from-background/90 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="absolute inset-x-0 bottom-0 p-3 flex flex-wrap items-center gap-2 bg-background/90">
         <span className="text-sm font-medium">{owner.nickname} está transmitindo</span>
         <span className="flex-1" />
         {!isMe && (
           <div className="flex items-center gap-2 w-40">
             <Volume2 className="h-4 w-4 text-muted-foreground" />
-            <Slider min={0} max={1.5} step={0.05} value={[screenVolume]} onValueChange={([v]) => client.setScreenVolume(v ?? 1)} />
+            <Slider min={0} max={1} step={0.05} value={[screenVolume]} onValueChange={([v]) => client.setScreenVolume(v ?? 1)} />
           </div>
         )}
         <Button size="sm" variant="secondary" onClick={() => void boxRef.current?.requestFullscreen?.()}>
@@ -150,7 +138,7 @@ function ScreenViewer({ owner, me, client }: { owner: Member; me: string; client
 export function VoiceView({ channel, client }: { channel: ChannelId; client: VoiceClient }) {
   const members = useApp((s) => s.members);
   const myChannel = useApp((s) => s.myChannel);
-  const me = useApp((s) => s.profile!.peerId);
+  const me = useApp((s) => s.profile?.peerId ?? "");
   const watching = useApp((s) => s.watching);
   const [, force] = useState(0);
   useEffect(() => force((n) => n + 1), [channel]);
@@ -158,21 +146,21 @@ export function VoiceView({ channel, client }: { channel: ChannelId; client: Voi
   const list = Object.values(members)
     .filter((m) => m.channel === channel)
     .sort((a, b) => (a.peerId === me ? -1 : b.peerId === me ? 1 : a.nickname.localeCompare(b.nickname)));
-  const def = VOICE_CHANNELS.find((c) => c.id === channel)!;
+  const def = VOICE_CHANNELS.find((c) => c.id === channel);
   const here = myChannel === channel;
   const watched = watching && here ? list.find((m) => m.peerId === watching) : undefined;
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
-      <header className="h-12 px-5 flex items-center gap-3 border-b">
-        <Volume2 className="h-4 w-4 text-muted-foreground" />
-        <h2 className="font-semibold">{def.name}</h2>
+    <div className="flex-1 flex flex-col min-h-0 min-w-0">
+      <header className="min-h-12 px-3 py-2 flex flex-wrap items-center gap-2 border-b">
+        <VideoIcon className="h-4 w-4 text-muted-foreground" />
+        <h2 className="font-semibold">{def?.name ?? "Sala de vídeo"}</h2>
         <span className="text-xs text-muted-foreground">{list.length} na sala</span>
         <span className="flex-1" />
         {here && <VoiceStatus client={client} />}
         {!here && (
           <Button size="sm" onClick={() => void client.joinChannel(channel)}>
-            <LogIn /> Entrar no canal
+            <LogIn /> Entrar na sala
           </Button>
         )}
       </header>
@@ -185,13 +173,9 @@ export function VoiceView({ channel, client }: { channel: ChannelId; client: Voi
           <div
             className={cn(
               "grid gap-3",
-              watched ? "grid-flow-col auto-cols-[180px] overflow-x-auto pb-1" : "flex-1 content-center",
+              watched ? "grid-flow-col auto-cols-[180px] overflow-x-auto pb-1" : "flex-1 content-center grid-cols-[repeat(auto-fit,minmax(min(100%,260px),1fr))] overflow-y-auto",
             )}
-            style={
-              watched
-                ? undefined
-                : { gridTemplateColumns: `repeat(auto-fit, minmax(${list.length > 4 ? 240 : 320}px, 1fr))` }
-            }
+
           >
             {list.map((m) => (
               <Tile key={m.peerId} m={m} me={me} client={client} />
@@ -212,7 +196,7 @@ function VoiceStatus({ client }: { client: VoiceClient }) {
         Ativar som
       </Button>
     );
-  if (status === "connecting") return <span className="text-xs text-muted-foreground">Conectando à voz…</span>;
+  if (status === "connecting") return <span className="text-xs text-muted-foreground">Conectando à sala…</span>;
   if (status === "reconnecting") return <span className="text-xs text-warning">Reconectando…</span>;
   if (status === "failed")
     return (

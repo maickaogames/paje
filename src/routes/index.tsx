@@ -6,6 +6,7 @@ import { SetupModal } from "@/components/app/SetupModal";
 import { Sidebar } from "@/components/app/Sidebar";
 import { TextChannel } from "@/components/app/TextChannel";
 import { VoiceView } from "@/components/app/VoiceView";
+import { MEDIA_FEATURES } from "@/lib/media-policy";
 import { getClient } from "@/lib/rtc";
 import { getState, useApp } from "@/lib/store";
 
@@ -16,12 +17,12 @@ export const Route = createFileRoute("/")({
       {
         name: "description",
         content:
-          "Sala de voz, vídeo e transmissão de tela peer-to-peer para jogar com amigos, sem cadastro e com baixo consumo de CPU.",
+          "Compartilhamento de tela e câmeras para jogar com amigos junto ao Discord, sem cadastro e com baixo consumo de CPU.",
       },
       { property: "og:title", content: "Pajé — Bem-vindos à tribo Akidauânus!" },
       {
         property: "og:description",
-        content: "Entre com a senha do grupo, escolha um apelido e fale com os amigos direto no navegador.",
+        content: "Entre com a senha do grupo, compartilhe a tela e veja seus amigos pela webcam ou câmera do celular.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
@@ -37,20 +38,22 @@ function useHydrated() {
 }
 
 function App() {
-  const profile = useApp((s) => s.profile)!;
+  const profile = useApp((s) => s.profile);
   const view = useApp((s) => s.view);
   const settings = useApp((s) => s.settings);
-  const client = getClient(profile.peerId);
+  const client = getClient(profile?.peerId ?? "");
 
   useEffect(() => {
+    if (!profile) return;
     void client.start();
     return () => {
       void client.stop();
     };
-  }, [client]);
+  }, [client, profile]);
 
   // Hotkeys: push-to-talk, mute, deafen.
   useEffect(() => {
+    if (!MEDIA_FEATURES.voice) return;
     const isTyping = (t: EventTarget | null) =>
       t instanceof HTMLElement && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
 
@@ -84,11 +87,13 @@ function App() {
     };
   }, [client, settings.ptt, settings.pttKey, settings.muteKey, settings.deafenKey]);
 
+  if (!profile) return null;
+
   return (
     <div className="flex h-screen overflow-hidden bg-background text-foreground">
       <Sidebar client={client} />
       <main className="flex-1 flex min-w-0">
-        {view === "text" ? <TextChannel /> : <VoiceView channel={view} client={client} />}
+        {MEDIA_FEATURES.text && view === "text" ? <TextChannel /> : <VoiceView channel={view === "text" ? "gameplay-1" : view} client={client} />}
       </main>
     </div>
   );

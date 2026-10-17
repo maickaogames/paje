@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Camera, RefreshCcw } from "lucide-react";
+import { Camera, RefreshCcw, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cameraErrorMessage } from "@/lib/media";
 import { PhoneCamClient } from "@/lib/rtc";
 
 export const Route = createFileRoute("/cam/$host")({
@@ -27,6 +28,7 @@ function CamPage() {
   const clientRef = useRef<PhoneCamClient | null>(null);
   const [facing, setFacing] = useState<"environment" | "user">("environment");
   const [status, setStatus] = useState("Toque em iniciar para liberar a câmera.");
+  const [busy, setBusy] = useState(false);
   const [live, setLive] = useState(false);
 
   useEffect(() => {
@@ -37,10 +39,13 @@ function CamPage() {
   }, []);
 
   async function start(next: "environment" | "user" = facing) {
+    if (busy) return;
+    setBusy(true);
     try {
       await clientRef.current?.stop();
       const c = new PhoneCamClient(host, k);
-      c.onState = (s) =>
+      c.onState = (s) => {
+        if (s === "disconnected") { setLive(false); if (videoRef.current) videoRef.current.srcObject = null; }
         setStatus(
           s === "connected"
             ? "Conectado ao computador."
@@ -48,8 +53,9 @@ function CamPage() {
               ? "Conectando…"
               : s === "waiting"
                 ? "Aguardando o computador abrir o QR…"
-                : "Desconectado. Toque em virar câmera para reconectar.",
+                : "Desconectado. Toque em iniciar câmera para reconectar.",
         );
+      };
       clientRef.current = c;
       const stream = await c.start(next);
       if (videoRef.current) videoRef.current.srcObject = stream;
@@ -57,7 +63,11 @@ function CamPage() {
       setLive(true);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
-      setStatus(/Link/.test(msg) ? msg : "Não foi possível acessar a câmera. Permita o acesso e tente de novo.");
+      setLive(false);
+      if (videoRef.current) videoRef.current.srcObject = null;
+      setStatus(/Link/.test(msg) ? msg : cameraErrorMessage(e));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -70,11 +80,12 @@ function CamPage() {
       <p className="text-sm text-muted-foreground text-center">{status}</p>
       <div className="flex gap-2">
         {!live ? (
-          <Button onClick={() => void start()} className="h-11 px-6 font-semibold">
+          <Button disabled={busy || !k} onClick={() => void start()} className="h-11 px-6 font-semibold">
             <Camera /> Iniciar câmera
           </Button>
         ) : (
           <Button
+            disabled={busy}
             variant="secondary"
             className="h-11"
             onClick={() => void start(facing === "environment" ? "user" : "environment")}
@@ -82,6 +93,7 @@ function CamPage() {
             <RefreshCcw /> Virar câmera
           </Button>
         )}
+        {live && <Button variant="destructive" disabled={busy} onClick={async () => { await clientRef.current?.stop(); setLive(false); if (videoRef.current) videoRef.current.srcObject = null; setStatus("Câmera desligada."); }}><Square /> Parar</Button>}
       </div>
       <p className="text-xs text-muted-foreground text-center max-w-xs">
         Mantenha esta página aberta e a tela ligada enquanto estiver usando a câmera.

@@ -24,8 +24,10 @@ import {
 } from "livekit-client";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
-import { getState, setState, type ChannelId, type Member, type RemoteStreams, VOICE_CHANNELS } from "./store";
+import { getState, setState, type ChannelId, type Member, type RemoteStreams, VOICE_CHANNELS, subscribeState } from "./store";
 import { sfx } from "./sfx";
+import { MEDIA_FEATURES, safeScreenAudio, shouldPlayScreenAudio, shouldSubscribeMedia } from "./media-policy";
+import { acquireCamera, cameraErrorMessage } from "./media";
 import { getPhoneCamToken, getPhoneHostToken, getVoiceToken } from "./livekit.functions";
 
 const PRESENCE_ROOM = "litevoice-room";
@@ -105,6 +107,9 @@ export class VoiceClient {
 
   private camRoom: Room | null = null;
   private camDialogOpen = false;
+  private phoneOp: Promise<unknown> = Promise.resolve();
+  private unsubscribeState: (() => void) | null = null;
+  private presenceReady = false;
 
   // Microfone: bruto → ganho → (enviado, analisador local, monitor)
   private micStream: MediaStream | null = null;
@@ -150,13 +155,26 @@ export class VoiceClient {
     document.addEventListener("visibilitychange", this.onVisibility);
     navigator.mediaDevices?.addEventListener?.("devicechange", this.onDeviceChange);
     window.addEventListener("online", this.onOnline);
-    this.vadTimer = window.setInterval(() => this.runVad(), 100);
+    if (MEDIA_FEATURES.voice) this.vadTimer = window.setInterval(() => this.runVad(), 100);
+    let watching = getState().watching;
+    let speaker = getState().devices.speaker;
+    this.unsubscribeState = subscribeState(() => {
+      const s = getState();
+      if (watching !== s.watching || speaker !== s.devices.speaker) {
+        watching = s.watching;
+        speaker = s.devices.speaker;
+        this.syncSubscriptions();
+      }
+    });
     this.statsTimer = window.setInterval(() => void this.collectStats(), 3000);
   }
 
   private async doStop() {
     if (!this.started) return;
     this.started = false;
+    this.unsubscribeState?.();
+    this.unsubscribeState = null;
+    this.presenceReady = false;
     document.removeEventListener("visibilitychange", this.onVisibility);
     navigator.mediaDevices?.removeEventListener?.("devicechange", this.onDeviceChange);
     window.removeEventListener("online", this.onOnline);
@@ -195,6 +213,7 @@ export class VoiceClient {
 
   private connectPresence() {
     if (!this.started) return;
+    this.presenceReady = false;
     if (this.presence) void supabase.removeChannel(this.presence);
     const ch = supabase.channel(PRESENCE_ROOM, {
       config: { presence: { key: this.me }, broadcast: { self: false, ack: false } },
@@ -274,9 +293,29 @@ export class VoiceClient {
         screenStream: entry.screenStream,
       };
     }
+    const previous = getState().members;
+    if (this.presenceReady && getState().myChannel) {
+      const channel = getState().myChannel;
+      for (const [id, member] of Object.entries(members)) {
+        if (id === this.me) continue;
+        const prev = previous[id];
+        if (member.channel === channel && prev?.channel !== channel) sfx.join();
+        if (prev?.channel === channel && member.channel !== channel) sfx.leave();
+        if (member.channel === channel && prev?.channel === channel) {
+          if (member.screenStream && !prev.screenStream) sfx.shareStart();
+          if (!member.screenStream && prev.screenStream) sfx.shareStop();
+          if (member.camStream && !prev.camStream) sfx.camStart();
+          if (!member.camStream && prev.camStream) sfx.camStop();
+        }
+      }
+      for (const [id, member] of Object.entries(previous)) {
+        if (id !== this.me && member.channel === channel && !members[id]) sfx.leave();
+      }
+    }
+    this.presenceReady = true;
     setState({ members });
-    const s = getState();
-    if (s.watching && !this.remote.get(s.watching)?.screen && s.watching !== this.me) setState({ watching: null });
+    const watching = getState().watching;
+    if (watching && watching !== this.me && !members[watching]?.screenStream) setState({ watching: null });
   }
 
   /* ---------------- canais de voz (LiveKit) ---------------- */
@@ -304,9 +343,9 @@ export class VoiceClient {
       return;
     }
     if (this.room) await this.disconnectRoom();
-    this.ensureCtx();
+    setState({ muted: true, deafened: false });
     setState({ myChannel: ch, view: ch, watching: null });
-    if (!this.micStream && s.devices.mic !== "none") {
+    if (MEDIA_FEATURES.voice && !this.micStream && s.devices.mic !== "none") {
       try {
         await this.openMic(s.devices.mic);
       } catch (e) {
@@ -331,7 +370,7 @@ export class VoiceClient {
     await this.disconnectRoom();
     setState({
       myChannel: null,
-      view: "text",
+      view: "gameplay-1",
       watching: null,
       speaking: {},
       pings: {},
@@ -369,14 +408,14 @@ export class VoiceClient {
       const { url, jwt } = await withTimeout(
         getVoiceToken({ data: { token: s.token, peerId: this.me, nickname: s.profile.nickname, channel: ch } }),
         10_000,
-        "Tempo esgotado ao pedir acesso à sala de voz.",
+        "Tempo esgotado ao pedir acesso à sala de vídeo.",
       );
       if (this.room !== room) return;
-      await withTimeout(room.connect(url, jwt, { autoSubscribe: true }), 30_000, "Tempo esgotado ao conectar na voz.");
+      await withTimeout(room.connect(url, jwt, { autoSubscribe: false }), 30_000, "Tempo esgotado ao conectar à sala.");
       if (this.room !== room) return;
       this.retries = 0;
       setState({ voiceStatus: "connected", audioBlocked: !room.canPlaybackAudio });
-      room.remoteParticipants.forEach((p) => p.trackPublications.forEach((pub) => pub.track && this.onTrack(pub.track, pub, p)));
+      this.syncSubscriptions();
       await this.publishAll();
     } catch (e) {
       console.warn("[voice] connect failed", e);
@@ -395,7 +434,7 @@ export class VoiceClient {
     if (this.retryTimer || getState().myChannel !== ch) return;
     if (this.retries >= MAX_RETRIES) {
       setState({ voiceStatus: "failed" });
-      toast.error("Não foi possível conectar na voz. Verifique sua internet e toque em “Tentar de novo”.");
+      toast.error("Não foi possível conectar à sala. Verifique sua internet e toque em “Tentar de novo”.");
       return;
     }
     setState({ voiceStatus: "reconnecting" });
@@ -422,6 +461,11 @@ export class VoiceClient {
   private bindRoom(room: Room) {
     room
       .on(RoomEvent.TrackSubscribed, (track, pub, p) => this.onTrack(track, pub, p))
+      .on(RoomEvent.TrackPublished, () => this.syncSubscriptions())
+      .on(RoomEvent.ParticipantConnected, () => this.syncSubscriptions())
+      .on(RoomEvent.TrackUnpublished, (pub, p) => {
+        if (pub.source === Track.Source.ScreenShare && getState().watching === p.identity) setState({ watching: null });
+      })
       .on(RoomEvent.TrackUnsubscribed, (track, pub, p) => this.offTrack(track, pub, p))
       .on(RoomEvent.TrackMuted, () => {})
       .on(RoomEvent.ParticipantDisconnected, (p) => this.dropRemote(p.identity))
@@ -439,6 +483,7 @@ export class VoiceClient {
       .on(RoomEvent.Reconnected, () => {
         if (this.room !== room) return;
         setState({ voiceStatus: "connected" });
+        this.syncSubscriptions();
         sfx.reconnect();
       })
       .on(RoomEvent.AudioPlaybackStatusChanged, () => setState({ audioBlocked: !room.canPlaybackAudio }))
@@ -450,7 +495,7 @@ export class VoiceClient {
         for (const id of [...this.remote.keys()]) this.dropRemote(id);
         if (reason === DisconnectReason.DUPLICATE_IDENTITY) {
           setState({ voiceStatus: "failed" });
-          toast.error("Você entrou na voz por outra aba ou aparelho. Esta aba saiu da chamada.");
+          toast.error("Você entrou na sala por outra aba ou aparelho. Esta aba saiu da chamada.");
           return;
         }
         if (reason === DisconnectReason.CLIENT_INITIATED || !ch) return;
@@ -460,8 +505,24 @@ export class VoiceClient {
 
   /* ---------------- faixas remotas ---------------- */
 
+  private syncSubscriptions() {
+    const s = getState();
+    this.room?.remoteParticipants.forEach((p) => p.trackPublications.forEach((pub) => {
+      const wanted = shouldSubscribeMedia(pub.source, p.identity, s.watching);
+      pub.setSubscribed(wanted);
+    }));
+    this.remote.forEach((r, id) => {
+      if (r.micEl) r.micEl.muted = true;
+      if (r.screenEl) r.screenEl.muted = !shouldPlayScreenAudio(id, s.watching, s.devices.speaker);
+    });
+  }
+
   private onTrack(track: RemoteTrack, pub: RemoteTrackPublication, p: RemoteParticipant) {
     const id = p.identity;
+    if (!shouldSubscribeMedia(pub.source, id, getState().watching)) {
+      pub.setSubscribed(false);
+      return;
+    }
     const r = this.remote.get(id) ?? {};
     const s = getState();
     switch (pub.source) {
@@ -480,7 +541,7 @@ export class VoiceClient {
         if (r.screenEl) r.screenAudio?.detach(r.screenEl).remove();
         r.screenAudio = track;
         r.screenEl = track.attach();
-        r.screenEl.muted = s.deafened;
+        r.screenEl.muted = !shouldPlayScreenAudio(id, s.watching, s.devices.speaker);
         audioHost().appendChild(r.screenEl);
         p.setVolume(Math.min(1, s.screenVolume), Track.Source.ScreenShareAudio);
         break;
@@ -535,7 +596,6 @@ export class VoiceClient {
     };
     setState((s) => ({
       streams: { ...s.streams, [id]: next },
-      watching: !next.screen && s.watching === id ? null : s.watching,
     }));
   }
 
@@ -559,6 +619,7 @@ export class VoiceClient {
     const id = speaker === "default" || speaker === "none" ? "default" : speaker;
     try {
       await this.room?.switchActiveDevice("audiooutput", id);
+      this.syncSubscriptions();
     } catch {
       toast.error("Não foi possível usar esse alto-falante.");
     }
@@ -618,7 +679,7 @@ export class VoiceClient {
 
   private micSending() {
     const s = getState();
-    if (!this.micStream) return false;
+    if (!MEDIA_FEATURES.voice || !this.micStream) return false;
     if (s.muted || s.deafened) return false;
     if (s.settings.ptt && !s.pttHeld) return false;
     return true;
@@ -667,6 +728,7 @@ export class VoiceClient {
 
   /** Abre o microfone e só troca o antigo depois que o novo funcionou. */
   private async openMic(deviceId: string) {
+    if (!MEDIA_FEATURES.voice) return;
     const st = getState().settings;
     const constraints: MediaTrackConstraints = {
       echoCancellation: true,
@@ -702,13 +764,15 @@ export class VoiceClient {
     this.rawMicStream = raw;
 
     // Já na chamada: troca a faixa enviada sem renegociar.
-    const track = this.micStream.getAudioTracks()[0]!;
+    const track = this.micStream.getAudioTracks()[0];
+    if (!track) return;
     if (oldPubTrack && this.pubs.mic) {
       await oldPubTrack.replaceTrack(track, { userProvidedTrack: true });
     }
   }
 
   async setMic(deviceId: string) {
+    if (!MEDIA_FEATURES.voice) { this.releaseMic(); return; }
     if (deviceId === "none") {
       if (this.pubs.mic?.track && this.room) await this.room.localParticipant.unpublishTrack(this.pubs.mic.track, false);
       this.pubs.mic = undefined;
@@ -724,7 +788,7 @@ export class VoiceClient {
 
   private async publishMic() {
     const track = this.micStream?.getAudioTracks()[0];
-    if (!this.room || !track || this.pubs.mic) return;
+    if (!MEDIA_FEATURES.voice || !this.room || !track || this.pubs.mic) return;
     this.pubs.mic = await this.room.localParticipant.publishTrack(track, {
       source: Track.Source.Microphone,
       name: "mic",
@@ -756,6 +820,7 @@ export class VoiceClient {
   }
 
   async setDeafened(v: boolean) {
+    if (!MEDIA_FEATURES.voice) return;
     setState({ deafened: v });
     this.remote.forEach((r) => {
       if (r.micEl) r.micEl.muted = v;
@@ -782,14 +847,20 @@ export class VoiceClient {
 
   async startCam(deviceId: string) {
     if (deviceId === "none") return;
-    const constraints: MediaTrackConstraints = {
-      width: { ideal: 640 },
-      height: { ideal: 360 },
-      frameRate: { ideal: 24, max: 30 },
-    };
-    if (deviceId !== "default") constraints.deviceId = { exact: deviceId };
-    const stream = await navigator.mediaDevices.getUserMedia({ video: constraints });
-    await this.setLocalCam(stream, false);
+    if (!this.room || getState().voiceStatus !== "connected") throw new Error("Aguarde a conexão com a sala antes de ligar a câmera.");
+    // Free the current hardware before reopening it (some drivers allow one capture only).
+    await this.stopCam();
+    await this.closePhoneCam(true);
+    const { stream, usedDefault } = await acquireCamera(deviceId);
+    if (usedDefault) setState((s) => ({ devices: { ...s.devices, cam: "default" } }));
+    try {
+      await this.setLocalCam(stream, false);
+      sfx.camStart();
+    } catch (e) {
+      stream.getTracks().forEach((t) => t.stop());
+      await this.stopCam();
+      throw e;
+    }
   }
 
   private async publishCam(stream: MediaStream) {
@@ -817,8 +888,17 @@ export class VoiceClient {
     }
     setState({ localCam: stream, camOn: !!stream, phoneCamConnected: fromPhone && !!stream });
     if (stream) {
-      stream.getVideoTracks().forEach((t) => (t.onended = () => void this.stopCam()));
-      await this.publishCam(stream).catch((e) => console.warn("[voice] publish cam", e));
+      stream.getVideoTracks().forEach((t) => (t.onended = () => {
+        if (getState().localCam === stream) {
+          void this.stopCam();
+          toast.error("A câmera foi desconectada. Conecte novamente ou escolha outra nas configurações.");
+        }
+      }));
+      try { await this.publishCam(stream); }
+      catch (e) {
+        setState({ localCam: null, camOn: false, phoneCamConnected: false });
+        throw new Error("A câmera abriu, mas não foi possível enviá-la à sala. Tente novamente.");
+      }
     }
     await this.publishPresence();
   }
@@ -829,16 +909,23 @@ export class VoiceClient {
     await this.unpublishCam();
     if (!s.phoneCamConnected) s.localCam.getTracks().forEach((t) => t.stop());
     setState({ localCam: null, camOn: false, phoneCamConnected: false });
-    if (publish) await this.publishPresence();
+    if (publish) { sfx.camStop(); await this.publishPresence(); }
   }
 
   /* ---------------- celular como webcam ---------------- */
 
   /** Abre a sala privada da câmera do celular e devolve o link para o QR. */
-  async openPhoneCam(): Promise<string> {
+  openPhoneCam(): Promise<string> {
+    const op = this.phoneOp.then(() => this.doOpenPhoneCam());
+    this.phoneOp = op.catch(() => {});
+    return op;
+  }
+
+  private async doOpenPhoneCam(): Promise<string> {
     this.camDialogOpen = true;
     const s = getState();
     if (!s.token) throw new Error("Sessão inválida.");
+    if (!this.room || s.voiceStatus !== "connected") throw new Error("Aguarde a conexão com a sala antes de conectar o celular.");
     const { url, jwt, phoneKey } = await getPhoneHostToken({ data: { token: s.token, peerId: this.me } });
     if (!this.camRoom) {
       const room = new Room({ adaptiveStream: false, dynacast: false, disconnectOnPageLeave: true });
@@ -846,7 +933,7 @@ export class VoiceClient {
         .on(RoomEvent.TrackSubscribed, (track) => {
           if (track.kind !== Track.Kind.Video) return;
           // Faixa do celular embrulhada num fluxo local estável e republicada no canal de voz.
-          void this.setLocalCam(new MediaStream([track.mediaStreamTrack]), true);
+          void this.setLocalCam(new MediaStream([track.mediaStreamTrack]), true).then(() => sfx.camStart()).catch((e) => toast.error(cameraErrorMessage(e)));
         })
         .on(RoomEvent.TrackUnsubscribed, () => {
           if (getState().phoneCamConnected) void this.stopCam();
@@ -856,13 +943,25 @@ export class VoiceClient {
           if (!this.camDialogOpen) void this.closePhoneCam();
         });
       this.camRoom = room;
-      await room.connect(url, jwt, { autoSubscribe: true });
+      try { await room.connect(url, jwt, { autoSubscribe: true }); }
+      catch (e) {
+        this.camRoom = null;
+        room.removeAllListeners();
+        await room.disconnect(true).catch(() => {});
+        throw new Error("Não foi possível conectar o celular. Tente abrir o QR novamente.");
+      }
     }
     return `${window.location.origin}/cam/${this.me}?k=${encodeURIComponent(phoneKey)}`;
   }
 
   /** Fecha a sala do celular quando ninguém mais precisa dela (economiza conexão). */
-  async closePhoneCam(force = false) {
+  closePhoneCam(force = false): Promise<void> {
+    const op = this.phoneOp.then(() => this.doClosePhoneCam(force));
+    this.phoneOp = op.catch(() => {});
+    return op;
+  }
+
+  private async doClosePhoneCam(force = false) {
     this.camDialogOpen = false;
     if (!this.camRoom) return;
     if (!force && getState().phoneCamConnected) return;
@@ -876,36 +975,41 @@ export class VoiceClient {
   /* ---------------- transmissão de tela ---------------- */
 
   async startShare() {
-    // O seletor nativo do navegador lista telas, janelas e abas. Áudio:
-    // aba do navegador → só o som da aba; tela inteira (Windows/ChromeOS) → som do sistema;
-    // janela de programa → sem áudio (limitação do navegador).
+    if (!this.room || getState().voiceStatus !== "connected") throw new Error("Aguarde a conexão com a sala antes de transmitir.");
+    if (getState().sharing) return;
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60, max: 60 } },
-      // Cancelamento de eco remove da transmissão as vozes dos outros participantes
-      // que saem pelos alto-falantes de quem transmite (evita o espectador se ouvir).
-      audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false },
-      systemAudio: "include",
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      systemAudio: "exclude",
+      windowAudio: "exclude",
       selfBrowserSurface: "exclude",
-      surfaceSwitching: "include",
+      surfaceSwitching: "exclude",
     } as DisplayMediaStreamOptions);
+    // Picker hints may be ignored: enforce isolation on the actual returned surface.
+    const surface = stream.getVideoTracks()[0]?.getSettings().displaySurface;
+    if (!safeScreenAudio(surface)) {
+      stream.getAudioTracks().forEach((t) => { t.stop(); stream.removeTrack(t); });
+      toast("Tela/janela compartilhada sem áudio para não retransmitir as vozes do Discord.");
+    }
     const v = stream.getVideoTracks()[0];
     if (v) {
       v.contentHint = "motion";
       v.onended = () => void this.stopShare();
     }
     setState({ localScreen: stream, sharing: true });
+    try { await this.publishScreen(stream); }
+    catch (e) {
+      await this.stopShare(false);
+      throw new Error("Não foi possível enviar a transmissão. Tente novamente.");
+    }
     sfx.shareStart();
-    await this.publishScreen(stream).catch((e) => {
-      console.warn("[voice] publish screen", e);
-      toast.error("Não foi possível enviar a transmissão.");
-    });
     await this.publishPresence();
   }
 
   private async publishScreen(stream: MediaStream) {
     if (!this.room) return;
     const v = stream.getVideoTracks()[0];
-    const a = stream.getAudioTracks()[0];
+    const a = safeScreenAudio(v?.getSettings().displaySurface) ? stream.getAudioTracks()[0] : undefined;
     if (v && !this.pubs.screen) {
       this.pubs.screen = await this.room.localParticipant.publishTrack(v, {
         source: Track.Source.ScreenShare,
@@ -959,13 +1063,17 @@ export class PhoneCamClient {
   }
 
   async start(facing: "environment" | "user" = "environment") {
+    await this.stop();
+    try {
     // Sem pedir resolução: o celular usa a câmera padrão, sem recorte/zoom.
     this.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing }, audio: false });
-    const vt = this.stream.getVideoTracks()[0]!;
+    const vt = this.stream.getVideoTracks()[0];
+    if (!vt) throw new Error("Câmera não encontrada.");
     const caps = (vt.getCapabilities?.() ?? {}) as { zoom?: { min?: number } };
     if (caps.zoom?.min != null) {
       await vt.applyConstraints({ advanced: [{ zoom: caps.zoom.min }] } as unknown as MediaTrackConstraints).catch(() => {});
     }
+    vt.onended = () => { void this.stop(); this.onState("disconnected"); };
     this.onState("connecting");
     const { url, jwt } = await getPhoneCamToken({ data: { key: this.key, host: this.host } });
     const room = new Room({ adaptiveStream: false, dynacast: true, disconnectOnPageLeave: true, stopLocalTrackOnUnpublish: true });
@@ -984,13 +1092,19 @@ export class PhoneCamClient {
     });
     this.onState(room.remoteParticipants.size ? "connected" : "waiting");
     return this.stream;
+    } catch (e) {
+      await this.stop();
+      throw e;
+    }
   }
 
   async stop() {
     const r = this.room;
     this.room = null;
+    r?.removeAllListeners();
     await r?.disconnect(true).catch(() => {});
-    this.stream?.getTracks().forEach((t) => t.stop());
+    this.stream?.getTracks().forEach((t) => { t.onended = null; t.stop(); });
+    this.stream = null;
   }
 }
 

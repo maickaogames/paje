@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { MEDIA_PUBLISH_SOURCES } from "./media-policy";
 import { assertCamKey, assertToken, makeCamKey } from "./group.server";
 
 const CHANNELS = ["gameplay-1", "gameplay-2", "afk"] as const;
@@ -8,7 +9,7 @@ function env() {
   const url = process.env["LIVEKIT_URL"];
   const key = process.env["LIVEKIT_API_KEY"];
   const secret = process.env["LIVEKIT_API_SECRET"];
-  if (!url || !key || !secret) throw new Error("Servidor de voz não configurado.");
+  if (!url || !key || !secret) throw new Error("Servidor de vídeo não configurado.");
   return { url, key, secret };
 }
 
@@ -29,7 +30,7 @@ export const getVoiceToken = createServerFn({ method: "POST" })
     const { url, key, secret } = env();
     const { AccessToken } = await import("livekit-server-sdk");
     const at = new AccessToken(key, secret, { identity: data.peerId, name: data.nickname, ttl: "6h" });
-    at.addGrant({ room: `paje-${data.channel}`, roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: false });
+    at.addGrant({ room: `paje-${data.channel}`, roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: false, canPublishSources: [...MEDIA_PUBLISH_SOURCES] });
     return { url, jwt: await at.toJwt() };
   });
 
@@ -65,6 +66,6 @@ export const getPhoneCamToken = createServerFn({ method: "POST" })
       canSubscribe: false,
       canPublishData: false,
       canPublishSources: ["camera"],
-    } as never);
+    });
     return { url, jwt: await at.toJwt() };
   });
