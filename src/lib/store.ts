@@ -112,7 +112,7 @@ export function newPeerId() {
 const defaults: AppState = {
   token: null,
   profile: null,
-  devices: { mic: "default", speaker: "default", cam: "none" },
+  devices: { mic: "none", speaker: "default", cam: "default" },
   settings: {
     ptt: false,
     pttKey: "KeyV",
@@ -127,8 +127,8 @@ const defaults: AppState = {
   connected: false,
   members: {},
   myChannel: null,
-  view: "text",
-  muted: false,
+  view: "gameplay-1",
+  muted: true,
   deafened: false,
   pttHeld: false,
   camOn: false,
@@ -164,14 +164,14 @@ export function setState(patch: Partial<AppState> | ((s: AppState) => Partial<Ap
   listeners.forEach((l) => l());
 }
 
-function subscribe(l: () => void) {
+export function subscribeState(l: () => void) {
   listeners.add(l);
   return () => listeners.delete(l);
 }
 
 export function useApp<T>(selector: (s: AppState) => T): T {
   return useSyncExternalStore(
-    subscribe,
+    subscribeState,
     () => selector(state),
     () => selector(state),
   );

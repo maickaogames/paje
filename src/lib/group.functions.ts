@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { assertTextEnabled } from "./media-policy";
 import { z } from "zod";
 import { assertToken, checkPassword, makeToken, fetchLinkPreview, firstUrl } from "./group.server";
 
@@ -28,6 +29,7 @@ export const listMessages = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     assertToken(data.token);
+    assertTextEnabled();
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     let q = supabaseAdmin.from("messages").select("*");
     if (data.since) {
@@ -64,6 +66,7 @@ export const sendMessage = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     assertToken(data.token);
+    assertTextEnabled();
     const content = data.content.trim();
     if (!content && !data.image) throw new Error("Mensagem vazia.");
 
