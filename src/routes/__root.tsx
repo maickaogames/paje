@@ -81,13 +81,13 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { title: "Pajé — Bem-vindos à tribo Akidauânus!" },
       {
         name: "description",
-        content: "Bem-vindos à tribo Akidauânus! Voz, vídeo e transmissão de tela leves para jogar com os amigos.",
+        content: "Bem-vindos à tribo Akidauânus! Câmeras e transmissão de tela leves para jogar com os amigos junto ao Discord.",
       },
       { name: "theme-color", content: "#12100e" },
       { property: "og:title", content: "Pajé — Bem-vindos à tribo Akidauânus!" },
       {
         property: "og:description",
-        content: "Voz, vídeo e transmissão de tela leves para jogar com os amigos.",
+        content: "Câmeras e transmissão de tela leves para jogar com os amigos junto ao Discord.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },

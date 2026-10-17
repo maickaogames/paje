@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { MEDIA_FEATURES, MEDIA_PUBLISH_SOURCES, shouldSubscribeMedia, shouldPlayScreenAudio, safeScreenAudio, assertTextEnabled } from "./media-policy";
 
 describe("Pajé alongside Discord", () => {

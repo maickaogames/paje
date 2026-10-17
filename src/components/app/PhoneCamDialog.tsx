@@ -15,11 +15,14 @@ export function PhoneCamDialog({ open, onOpenChange }: { open: boolean; onOpenCh
     if (!open || !c) return;
     let alive = true;
     setError(null);
+    setUrl("");
+    setQr(null);
     c.openPhoneCam()
       .then(async (u) => {
         if (!alive) return;
         setUrl(u);
-        setQr(await QRCode.toDataURL(u, { margin: 1, width: 240, color: { dark: "#f4f1ea", light: "#00000000" } }));
+        const code = await QRCode.toDataURL(u, { margin: 1, width: 240 });
+        if (alive) setQr(code);
       })
       .catch((e) => alive && setError(e instanceof Error ? e.message : "Falha ao preparar o link."));
     return () => {
@@ -46,7 +49,7 @@ export function PhoneCamDialog({ open, onOpenChange }: { open: boolean; onOpenCh
             <div className="h-60 w-60 rounded-lg bg-muted animate-pulse" />
           )}
         </div>
-        {url && <code className="block text-xs text-center break-all bg-surface rounded-md p-2 select-all">{url}</code>}
+        {!error && url && <code className="block text-xs text-center break-all bg-surface rounded-md p-2 select-all">{url}</code>}
         <p className={connected ? "text-sm text-online text-center" : "text-sm text-muted-foreground text-center"}>
           {connected ? "Celular conectado — a câmera dele está sendo usada." : "Aguardando o celular…"}
         </p>
