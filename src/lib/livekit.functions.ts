@@ -1,6 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { MEDIA_PUBLISH_SOURCES } from "./media-policy";
 import { assertCamKey, assertToken, makeCamKey } from "./group.server";
 
 const CHANNELS = ["gameplay-1", "gameplay-2", "afk"] as const;
@@ -28,9 +27,9 @@ export const getVoiceToken = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     assertToken(data.token);
     const { url, key, secret } = env();
-    const { AccessToken } = await import("livekit-server-sdk");
+    const { AccessToken, TrackSource } = await import("livekit-server-sdk");
     const at = new AccessToken(key, secret, { identity: data.peerId, name: data.nickname, ttl: "6h" });
-    at.addGrant({ room: `paje-${data.channel}`, roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: false, canPublishSources: [...MEDIA_PUBLISH_SOURCES] });
+    at.addGrant({ room: `paje-${data.channel}`, roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: false, canPublishSources: [TrackSource.CAMERA, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO] });
     return { url, jwt: await at.toJwt() };
   });
 
@@ -42,7 +41,7 @@ export const getPhoneHostToken = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     assertToken(data.token);
     const { url, key, secret } = env();
-    const { AccessToken } = await import("livekit-server-sdk");
+    const { AccessToken, TrackSource } = await import("livekit-server-sdk");
     const at = new AccessToken(key, secret, { identity: data.peerId, ttl: "6h" });
     at.addGrant({ room: `cam-${data.peerId}`, roomJoin: true, canPublish: false, canSubscribe: true, canPublishData: false });
     // Chave curta só para a câmera; o celular nunca recebe a sessão do grupo.
@@ -57,7 +56,7 @@ export const getPhoneCamToken = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     assertCamKey(data.host, data.key);
     const { url, key, secret } = env();
-    const { AccessToken } = await import("livekit-server-sdk");
+    const { AccessToken, TrackSource } = await import("livekit-server-sdk");
     const at = new AccessToken(key, secret, { identity: `${data.host}-cam`, ttl: "6h" });
     at.addGrant({
       room: `cam-${data.host}`,
@@ -65,7 +64,7 @@ export const getPhoneCamToken = createServerFn({ method: "POST" })
       canPublish: true,
       canSubscribe: false,
       canPublishData: false,
-      canPublishSources: ["camera"],
+      canPublishSources: [TrackSource.CAMERA],
     });
     return { url, jwt: await at.toJwt() };
   });
