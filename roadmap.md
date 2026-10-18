@@ -27,10 +27,10 @@
 - Overlay sobre o jogo e hotkeys globais fora da janela.
 
 ## Estabilização (out/2026)
-- [ ] Novo foco: desabilitar voz/texto, preservar código e priorizar telas/câmeras
-- [ ] Áudio exclusivo de quem assiste e proteção contra captura do Discord
-- [ ] Recuperação de webcam/celular e sons das ações dos participantes
-- [ ] Validar regras e fluxo da atualização
+- [x] Novo foco: desabilitar voz/texto, preservar código e priorizar telas/câmeras
+- [x] Áudio exclusivo de quem assiste e proteção contra captura do Discord
+- [x] Recuperação de webcam/celular e sons das ações dos participantes
+- [x] Validar regras e fluxo da atualização
 - [x] Voz/vídeo/tela migrados para LiveKit (servidor SFU) com tokens emitidos no servidor
 - [x] Reconexão automática (voz e presença) com espera progressiva e botão "Tentar de novo"
 - [x] Aviso "Ativar som" quando o navegador bloqueia áudio
