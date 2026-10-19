@@ -26,7 +26,8 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { getState, setState, type ChannelId, type Member, type RemoteStreams, VOICE_CHANNELS, subscribeState } from "./store";
 import { sfx } from "./sfx";
-import { MEDIA_FEATURES, safeScreenAudio, shouldPlayScreenAudio, shouldSubscribeMedia } from "./media-policy";
+import { MEDIA_FEATURES, allowScreenAudio, safeScreenAudio, shouldPlayScreenAudio, shouldSubscribeMedia } from "./media-policy";
+import { HelperAudioClient } from "./audio-helper";
 import { acquireCamera, cameraErrorMessage } from "./media";
 import { getPhoneCamToken, getPhoneHostToken, getVoiceToken } from "./livekit.functions";
 
@@ -128,8 +129,14 @@ export class VoiceClient {
   private started = false;
   private op: Promise<void> = Promise.resolve();
 
+  /** Componente auxiliar local de captura seletiva de áudio (Windows). */
+  readonly helper = new HelperAudioClient();
+  private shareAudioTrack: MediaStreamTrack | null = null;
+
   constructor(peerId: string) {
     this.me = peerId;
+    this.helper.onChange = () =>
+      setState({ helperStatus: this.helper.status, helperProcesses: this.helper.processes, helperPid: this.helper.selectedPid });
   }
 
   /** Operações de entrada/saída são serializadas: nunca correm em paralelo. */
