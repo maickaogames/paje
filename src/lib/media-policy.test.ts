@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { MEDIA_FEATURES, MEDIA_PUBLISH_SOURCES, shouldSubscribeMedia, shouldPlayScreenAudio, safeScreenAudio, assertTextEnabled } from "./media-policy";
+import { MEDIA_FEATURES, MEDIA_PUBLISH_SOURCES, shouldSubscribeMedia, shouldPlayScreenAudio, safeScreenAudio, allowScreenAudio, assertTextEnabled } from "./media-policy";
 
 describe("Pajé alongside Discord", () => {
   test("voice is temporarily disabled and microphone publication is excluded", () => {
@@ -24,5 +24,12 @@ describe("Pajé alongside Discord", () => {
     expect(safeScreenAudio("window")).toBe(false);
     expect(safeScreenAudio(undefined)).toBe(false);
     expect(safeScreenAudio("browser")).toBe(true);
+  });
+  test("helper audio excludes Discord by construction and is allowed on any surface", () => {
+    expect(allowScreenAudio("monitor", true)).toBe(true);
+    expect(allowScreenAudio("window", true)).toBe(true);
+    expect(allowScreenAudio("monitor", false)).toBe(false);
+    expect(allowScreenAudio("window", false)).toBe(false);
+    expect(allowScreenAudio("browser", false)).toBe(true);
   });
 });
