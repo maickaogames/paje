@@ -16,6 +16,15 @@ export function safeScreenAudio(surface: string | undefined) {
   return surface === "browser";
 }
 
+/**
+ * Áudio vindo do componente auxiliar local é capturado por processo:
+ * só o programa escolhido entra, o Discord fica de fora por construção.
+ * Por isso ele é permitido em qualquer superfície (tela, janela ou aba).
+ */
+export function allowScreenAudio(surface: string | undefined, fromHelper: boolean) {
+  return fromHelper || safeScreenAudio(surface);
+}
+
 export function assertTextEnabled() {
   if (!MEDIA_FEATURES.text) throw new Error("O chat de texto está temporariamente desativado. Use o Discord.");
 }
