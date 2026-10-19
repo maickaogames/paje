@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Activity, Hash, LogOut, MicOff, MonitorUp, MonitorX, Settings, Smartphone, Video, VideoOff } from "lucide-react";
+import { Activity, AudioLines, Hash, LogOut, MicOff, MonitorUp, MonitorX, Settings, Smartphone, Video, VideoOff } from "lucide-react";
 import { toast } from "sonner";
 import logo from "@/assets/paje-logo.png";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import type { VoiceClient } from "@/lib/rtc";
 import { Avatar } from "./Avatar";
 import { SettingsDialog } from "./SettingsDialog";
 import { PhoneCamDialog } from "./PhoneCamDialog";
+import { ShareAudioDialog } from "./ShareAudioDialog";
 
 export function Sidebar({ client }: { client: VoiceClient }) {
   const members = useApp((s) => s.members);
@@ -23,6 +24,7 @@ export function Sidebar({ client }: { client: VoiceClient }) {
   const status = useApp((s) => s.voiceStatus);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [phoneOpen, setPhoneOpen] = useState(false);
+  const [shareAudioOpen, setShareAudioOpen] = useState(false);
   const [camBusy, setCamBusy] = useState(false);
   const [shareBusy, setShareBusy] = useState(false);
   const ready = !!myChannel && status === "connected";
@@ -98,14 +100,16 @@ export function Sidebar({ client }: { client: VoiceClient }) {
           <div className="min-w-0 flex-1"><p className="text-sm font-medium truncate">{profile.nickname}</p><p className="text-xs text-muted-foreground">{camOn ? "Câmera ligada" : "Câmera desligada"}</p></div>
           <Button variant="ghost" size="icon" title="Configurações" aria-label="Configurações" onClick={() => setSettingsOpen(true)}><Settings /></Button>
         </div>
-        <div className="grid grid-cols-3 gap-1">
+        <div className="grid grid-cols-4 gap-1">
           <Button variant={camOn ? "secondary" : "ghost"} title="Webcam" aria-label="Webcam" onClick={() => void toggleCam()} disabled={!ready || camBusy}>{camOn ? <Video /> : <VideoOff />}</Button>
           <Button variant="ghost" title="Usar celular como webcam" aria-label="Usar celular como webcam" onClick={() => setPhoneOpen(true)} disabled={!ready}><Smartphone /></Button>
           <Button variant={sharing ? "secondary" : "ghost"} title={sharing ? "Encerrar transmissão" : "Transmitir tela"} aria-label={sharing ? "Encerrar transmissão" : "Transmitir tela"} onClick={() => void toggleShare()} disabled={!ready || shareBusy}>{sharing ? <MonitorX /> : <MonitorUp />}</Button>
+          <Button variant="ghost" title="Áudio da transmissão" aria-label="Áudio da transmissão" onClick={() => setShareAudioOpen(true)}><AudioLines /></Button>
         </div>
       </footer>
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} client={client} />
       <PhoneCamDialog open={phoneOpen} onOpenChange={setPhoneOpen} />
+      <ShareAudioDialog open={shareAudioOpen} onOpenChange={setShareAudioOpen} client={client} />
     </aside>
   );
 }

@@ -26,7 +26,8 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { getState, setState, type ChannelId, type Member, type RemoteStreams, VOICE_CHANNELS, subscribeState } from "./store";
 import { sfx } from "./sfx";
-import { MEDIA_FEATURES, safeScreenAudio, shouldPlayScreenAudio, shouldSubscribeMedia } from "./media-policy";
+import { MEDIA_FEATURES, allowScreenAudio, safeScreenAudio, shouldPlayScreenAudio, shouldSubscribeMedia } from "./media-policy";
+import { HelperAudioClient } from "./audio-helper";
 import { acquireCamera, cameraErrorMessage } from "./media";
 import { getPhoneCamToken, getPhoneHostToken, getVoiceToken } from "./livekit.functions";
 
@@ -128,8 +129,14 @@ export class VoiceClient {
   private started = false;
   private op: Promise<void> = Promise.resolve();
 
+  /** Componente auxiliar local de captura seletiva de áudio (Windows). */
+  readonly helper = new HelperAudioClient();
+  private shareAudioTrack: MediaStreamTrack | null = null;
+
   constructor(peerId: string) {
     this.me = peerId;
+    this.helper.onChange = () =>
+      setState({ helperStatus: this.helper.status, helperProcesses: this.helper.processes, helperPid: this.helper.selectedPid });
   }
 
   /** Operações de entrada/saída são serializadas: nunca correm em paralelo. */
@@ -987,9 +994,18 @@ export class VoiceClient {
     } as DisplayMediaStreamOptions);
     // Picker hints may be ignored: enforce isolation on the actual returned surface.
     const surface = stream.getVideoTracks()[0]?.getSettings().displaySurface;
-    if (!safeScreenAudio(surface)) {
+    // Captura seletiva: o componente auxiliar isola o processo escolhido e
+    // nunca inclui o Discord — vale para qualquer superfície.
+    if (this.helper.selectedPid != null && (this.helper.status === "ready" || this.helper.status === "capturing")) {
+      this.shareAudioTrack = await this.helper.startCapture();
+    }
+    if (!allowScreenAudio(surface, this.shareAudioTrack != null)) {
       stream.getAudioTracks().forEach((t) => { t.stop(); stream.removeTrack(t); });
       toast("Tela/janela compartilhada sem áudio para não retransmitir as vozes do Discord.");
+    } else if (this.shareAudioTrack) {
+      // A faixa do helper substitui o áudio bruto do sistema.
+      stream.getAudioTracks().forEach((t) => { t.stop(); stream.removeTrack(t); });
+      toast("Transmitindo o áudio do programa selecionado, sem as vozes do Discord.");
     }
     const v = stream.getVideoTracks()[0];
     if (v) {
@@ -1009,7 +1025,7 @@ export class VoiceClient {
   private async publishScreen(stream: MediaStream) {
     if (!this.room) return;
     const v = stream.getVideoTracks()[0];
-    const a = safeScreenAudio(v?.getSettings().displaySurface) ? stream.getAudioTracks()[0] : undefined;
+    const a = this.shareAudioTrack ?? (safeScreenAudio(v?.getSettings().displaySurface) ? stream.getAudioTracks()[0] : undefined);
     if (v && !this.pubs.screen) {
       this.pubs.screen = await this.room.localParticipant.publishTrack(v, {
         source: Track.Source.ScreenShare,
@@ -1042,6 +1058,8 @@ export class VoiceClient {
       if (t && lp) await lp.unpublishTrack(t, false).catch(() => {});
     }
     s.localScreen.getTracks().forEach((t) => t.stop());
+    this.shareAudioTrack = null;
+    await this.helper.stopCapture();
     setState({ localScreen: null, sharing: false });
     sfx.shareStop();
     if (publish) await this.publishPresence();

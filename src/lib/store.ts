@@ -83,6 +83,9 @@ export interface AppState {
   hidden: boolean; // tab hidden → power save
   voiceStatus: "idle" | "connecting" | "connected" | "reconnecting" | "failed";
   audioBlocked: boolean; // navegador bloqueou a reprodução automática
+  helperStatus: "off" | "connecting" | "ready" | "capturing" | "unavailable";
+  helperProcesses: { pid: number; name: string }[];
+  helperPid: number | null;
 }
 
 /* ---------- Persistence ---------- */
@@ -146,6 +149,9 @@ const defaults: AppState = {
   hidden: false,
   voiceStatus: "idle",
   audioBlocked: false,
+  helperStatus: "off",
+  helperProcesses: [],
+  helperPid: null,
 };
 
 /* ---------- Tiny store ---------- */
