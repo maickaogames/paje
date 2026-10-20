@@ -66,7 +66,7 @@ export function ShareAudioDialog({
               transmissão.
             </p>
             <Select
-              value={pid != null ? String(pid) : undefined}
+              value={pid != null ? String(pid) : ""}
               onValueChange={(v) => {
                 const n = Number(v);
                 setState({ helperPid: n });
