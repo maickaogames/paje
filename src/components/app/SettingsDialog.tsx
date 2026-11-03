@@ -156,6 +156,9 @@ export function SettingsDialog({
           <Row label="Modo economia" hint="Pausa a reprodução dos vídeos quando a aba está em segundo plano">
             <Switch checked={settings.powerSave} onCheckedChange={(powerSave) => patch({ powerSave })} />
           </Row>
+          <Row label="Transmissão em alta qualidade" hint="Desligado: 720p/30fps, mais leve para jogar. Ligado: 1080p/60fps">
+            <Switch checked={settings.shareProfile === "quality"} onCheckedChange={(on) => patch({ shareProfile: on ? "quality" : "performance" })} />
+          </Row>
         </section>
 
         <div className="pt-4 border-t flex justify-between items-center">
