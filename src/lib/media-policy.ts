@@ -28,3 +28,10 @@ export function allowScreenAudio(surface: string | undefined, fromHelper: boolea
 export function assertTextEnabled() {
   if (!MEDIA_FEATURES.text) throw new Error("O chat de texto está temporariamente desativado. Use o Discord.");
 }
+export type ShareProfile = "performance" | "quality";
+/** Perfil de transmissão: desempenho (padrão, leve para PCs modestos) ou qualidade. */
+export function shareProfileParams(p: ShareProfile | undefined) {
+  return p === "quality"
+    ? { width: 1920, height: 1080, fps: 60, maxBitrate: 6_000_000 }
+    : { width: 1280, height: 720, fps: 30, maxBitrate: 2_500_000 };
+}

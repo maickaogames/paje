@@ -33,6 +33,7 @@ export interface Settings {
   micGain: number; // 0.2..3 ganho do microfone
   noiseSuppression: boolean;
   micMonitor: boolean; // ouvir o próprio microfone
+  shareProfile?: "performance" | "quality";
 }
 
 export interface Member {

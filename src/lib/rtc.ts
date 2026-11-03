@@ -26,7 +26,7 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { getState, setState, type ChannelId, type Member, type RemoteStreams, VOICE_CHANNELS, subscribeState } from "./store";
 import { sfx } from "./sfx";
-import { MEDIA_FEATURES, allowScreenAudio, safeScreenAudio, shouldPlayScreenAudio, shouldSubscribeMedia } from "./media-policy";
+import { MEDIA_FEATURES, allowScreenAudio, shareProfileParams, safeScreenAudio, shouldPlayScreenAudio, shouldSubscribeMedia } from "./media-policy";
 import { HelperAudioClient } from "./audio-helper";
 import { acquireCamera, cameraErrorMessage } from "./media";
 import { getPhoneCamToken, getPhoneHostToken, getVoiceToken } from "./livekit.functions";
@@ -984,8 +984,9 @@ export class VoiceClient {
   async startShare() {
     if (!this.room || getState().voiceStatus !== "connected") throw new Error("Aguarde a conexão com a sala antes de transmitir.");
     if (getState().sharing) return;
+    const prof = shareProfileParams(getState().settings.shareProfile);
     const stream = await navigator.mediaDevices.getDisplayMedia({
-      video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60, max: 60 } },
+      video: { width: { ideal: prof.width }, height: { ideal: prof.height }, frameRate: { ideal: prof.fps, max: prof.fps } },
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
       systemAudio: "exclude",
       windowAudio: "exclude",
@@ -1033,8 +1034,8 @@ export class VoiceClient {
         simulcast: false,
         videoCodec: "h264", // codificação por hardware na maioria dos PCs
         degradationPreference: "maintain-framerate",
-        screenShareEncoding: { maxBitrate: 6_000_000, maxFramerate: 60 },
-        videoEncoding: { maxBitrate: 6_000_000, maxFramerate: 60 },
+        screenShareEncoding: { maxBitrate: shareProfileParams(getState().settings.shareProfile).maxBitrate, maxFramerate: shareProfileParams(getState().settings.shareProfile).fps },
+        videoEncoding: { maxBitrate: shareProfileParams(getState().settings.shareProfile).maxBitrate, maxFramerate: shareProfileParams(getState().settings.shareProfile).fps },
       });
     }
     if (a && !this.pubs.screenAudio) {

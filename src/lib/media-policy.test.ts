@@ -33,3 +33,12 @@ describe("Pajé alongside Discord", () => {
     expect(allowScreenAudio("browser", false)).toBe(true);
   });
 });
+import { shareProfileParams } from "./media-policy";
+describe("shareProfileParams", () => {
+  test("padrão é desempenho 720p/30", () => {
+    expect(shareProfileParams(undefined)).toMatchObject({ height: 720, fps: 30 });
+  });
+  test("qualidade é 1080p/60", () => {
+    expect(shareProfileParams("quality")).toMatchObject({ height: 1080, fps: 60 });
+  });
+});

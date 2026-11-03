@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Activity, AudioLines, Hash, LogOut, MicOff, MonitorUp, MonitorX, Settings, Smartphone, Video, VideoOff } from "lucide-react";
+import { Download, Activity, AudioLines, Hash, LogOut, MicOff, MonitorUp, MonitorX, Settings, Smartphone, Video, VideoOff } from "lucide-react";
 import { toast } from "sonner";
 import logo from "@/assets/paje-logo.png";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,8 @@ import { Avatar } from "./Avatar";
 import { SettingsDialog } from "./SettingsDialog";
 import { PhoneCamDialog } from "./PhoneCamDialog";
 import { ShareAudioDialog } from "./ShareAudioDialog";
+
+const WINDOWS_DOWNLOAD_URL = import.meta.env["VITE_WINDOWS_DOWNLOAD_URL"] as string | undefined;
 
 export function Sidebar({ client }: { client: VoiceClient }) {
   const members = useApp((s) => s.members);
@@ -106,6 +108,9 @@ export function Sidebar({ client }: { client: VoiceClient }) {
           <Button variant={sharing ? "secondary" : "ghost"} title={sharing ? "Encerrar transmissão" : "Transmitir tela"} aria-label={sharing ? "Encerrar transmissão" : "Transmitir tela"} onClick={() => void toggleShare()} disabled={!ready || shareBusy}>{sharing ? <MonitorX /> : <MonitorUp />}</Button>
           <Button variant="ghost" title="Áudio da transmissão" aria-label="Áudio da transmissão" onClick={() => setShareAudioOpen(true)}><AudioLines /></Button>
         </div>
+        {WINDOWS_DOWNLOAD_URL && typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window) && (
+          <a href={WINDOWS_DOWNLOAD_URL} className="mt-2 flex items-center justify-center gap-1 text-xs text-muted-foreground hover:text-foreground"><Download className="h-3 w-3" /> Baixar para Windows</a>
+        )}
       </footer>
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} client={client} />
       <PhoneCamDialog open={phoneOpen} onOpenChange={setPhoneOpen} />
