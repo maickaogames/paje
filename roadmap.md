@@ -38,3 +38,10 @@
 - [x] Celular como webcam via link assinado de 12h (não expõe a sessão do grupo)
 - [x] Chat: busca mensagens perdidas ao reconectar
 - [ ] Teste real com 3+ pessoas em redes diferentes (precisa de usuários reais)
+
+## Atualização nov/2026
+- [x] Perfil de transmissão (720p/30 leve ou 1080p/60)
+- [x] Estrutura do app Windows (Tauri) + gerador automático do instalador
+- [x] Botão "Baixar para Windows" (aparece quando houver link do instalador)
+- [ ] Captura de áudio só do jogo no app Windows (precisa de PC Windows para testar)
+- [ ] Mini-player e atalhos globais
