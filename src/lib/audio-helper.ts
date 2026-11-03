@@ -66,6 +66,21 @@ export class PcmRingBuffer {
   }
 }
 
+// Ponte nativa do app Pajé para Windows (Tauri). Disponível só no app instalado.
+interface TauriGlobal {
+  core: {
+    invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+    Channel: new () => { onmessage: (data: unknown) => void };
+  };
+}
+function tauri(): TauriGlobal | null {
+  if (typeof window === "undefined") return null;
+  return ((window as unknown as { __TAURI__?: TauriGlobal }).__TAURI__) ?? null;
+}
+export function isDesktopApp() {
+  return tauri() != null;
+}
+
 export class HelperAudioClient {
   status: HelperStatus = "off";
   processes: HelperProcess[] = [];
@@ -73,6 +88,7 @@ export class HelperAudioClient {
   onChange: () => void = () => {};
 
   private ws: WebSocket | null = null;
+  private native = false;
   private ctx: AudioContext | null = null;
   private node: AudioWorkletNode | null = null;
   private dest: MediaStreamAudioDestinationNode | null = null;
@@ -86,6 +102,13 @@ export class HelperAudioClient {
   /** Tenta conectar ao componente auxiliar local. Retorna true se disponível. */
   async connect(): Promise<boolean> {
     if (this.ws && (this.status === "ready" || this.status === "capturing")) return true;
+    const t = tauri();
+    if (t) {
+      this.native = true;
+      this.setStatus("ready");
+      this.refreshProcesses();
+      return true;
+    }
     if (typeof WebSocket === "undefined") {
       this.setStatus("unavailable");
       return false;
@@ -159,11 +182,27 @@ export class HelperAudioClient {
 
   /** Pede ao componente a lista de processos com saída de áudio. */
   refreshProcesses() {
+    const t = this.native ? tauri() : null;
+    if (t) {
+      void t.core
+        .invoke<HelperProcess[]>("list_audio_processes")
+        .then((list) => {
+          this.processes = list;
+          this.onChange();
+        })
+        .catch(() => {});
+      return;
+    }
     this.ws?.send(JSON.stringify({ type: "list" }));
   }
 
   /** Seleciona o processo cuja saída de áudio será capturada. */
   selectProcess(pid: number) {
+    if (this.native) {
+      this.selectedPid = pid;
+      this.onChange();
+      return;
+    }
     this.ws?.send(JSON.stringify({ type: "select", pid }));
   }
 
@@ -172,7 +211,8 @@ export class HelperAudioClient {
    * pronta para publicação. Retorna null quando indisponível (falha fechada).
    */
   async startCapture(): Promise<MediaStreamTrack | null> {
-    if (!this.ws || this.selectedPid == null) return null;
+    const t = this.native ? tauri() : null;
+    if ((!this.ws && !t) || this.selectedPid == null) return null;
     try {
       if (!this.ctx) {
         this.ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
@@ -186,7 +226,18 @@ export class HelperAudioClient {
       });
       this.dest = this.ctx.createMediaStreamDestination();
       this.node.connect(this.dest);
-      this.ws.send(JSON.stringify({ type: "start" }));
+      if (t) {
+        const ch = new t.core.Channel();
+        ch.onmessage = (data) => {
+          if (data instanceof ArrayBuffer && this.node) {
+            this.node.port.postMessage(new Float32Array(data));
+          }
+        };
+        await t.core.invoke("start_process_audio_capture", { pid: this.selectedPid, onAudio: ch });
+        this.setStatus("capturing");
+      } else {
+        this.ws?.send(JSON.stringify({ type: "start" }));
+      }
       this.track = this.dest.stream.getAudioTracks()[0] ?? null;
       return this.track;
     } catch {
@@ -197,7 +248,9 @@ export class HelperAudioClient {
 
   /** Encerra a captura e libera a faixa, mantendo a conexão com o componente. */
   async stopCapture() {
-    if (this.ws?.readyState === WebSocket.OPEN) {
+    const t = this.native ? tauri() : null;
+    if (t) await t.core.invoke("stop_process_audio_capture").catch(() => {});
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: "stop" }));
     }
     await this.releaseAudio();
