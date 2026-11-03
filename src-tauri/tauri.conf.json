@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Pajé",
+  "version": "0.1.0",
+  "identifier": "app.paje.desktop",
+  "build": { "frontendDist": "https://paje.lovable.app" },
+  "app": {
+    "windows": [{ "title": "Pajé", "url": "https://paje.lovable.app", "width": 1280, "height": 800 }],
+    "security": { "csp": null }
+  },
+  "bundle": { "active": true, "targets": ["nsis"], "icon": ["icons/icon.png"] }
+}
