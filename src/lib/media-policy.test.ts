@@ -35,10 +35,10 @@ describe("Pajé alongside Discord", () => {
 });
 import { shareProfileParams } from "./media-policy";
 describe("shareProfileParams", () => {
-  it("padrão é desempenho 720p/30", () => {
+  test("padrão é desempenho 720p/30", () => {
     expect(shareProfileParams(undefined)).toMatchObject({ height: 720, fps: 30 });
   });
-  it("qualidade é 1080p/60", () => {
+  test("qualidade é 1080p/60", () => {
     expect(shareProfileParams("quality")).toMatchObject({ height: 1080, fps: 60 });
   });
 });
