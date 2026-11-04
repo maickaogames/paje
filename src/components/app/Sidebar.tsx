@@ -12,7 +12,7 @@ import { SettingsDialog } from "./SettingsDialog";
 import { PhoneCamDialog } from "./PhoneCamDialog";
 import { ShareAudioDialog } from "./ShareAudioDialog";
 
-const WINDOWS_DOWNLOAD_URL = import.meta.env["VITE_WINDOWS_DOWNLOAD_URL"] as string | undefined;
+const WINDOWS_DOWNLOAD_URL = "https://github.com/maickaogames/paje/releases/latest/download/Paje-Setup.exe";
 
 export function Sidebar({ client }: { client: VoiceClient }) {
   const members = useApp((s) => s.members);
