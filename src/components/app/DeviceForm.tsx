@@ -65,14 +65,14 @@ export function DeviceForm({ value, onChange }: { value: Devices; onChange: (d: 
         options={lists.mics}
         allowDefault
       />}
-      <DeviceSelect
+      {MEDIA_FEATURES.voice && <DeviceSelect
         icon={<Volume2 className="h-3.5 w-3.5" />}
         label="Saída de áudio"
         value={value.speaker}
         onChange={(speaker) => onChange({ ...value, speaker })}
         options={lists.speakers}
         allowDefault
-      />
+      />}
       <DeviceSelect
         icon={<Camera className="h-3.5 w-3.5" />}
         label="Webcam"

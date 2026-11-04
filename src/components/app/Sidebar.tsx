@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Download, Activity, AudioLines, Hash, LogOut, MicOff, MonitorUp, MonitorX, Settings, Smartphone, Video, VideoOff } from "lucide-react";
+import { Download, Activity, Gamepad2, LogOut, MonitorUp, MonitorX, Settings, Smartphone, Video, VideoOff } from "lucide-react";
 import { toast } from "sonner";
 import logo from "@/assets/paje-logo.png";
 import { Button } from "@/components/ui/button";
@@ -81,11 +81,6 @@ export function Sidebar({ client }: { client: VoiceClient }) {
             );
           })}
         </div>
-        <div className="border-t border-sidebar-border pt-3 space-y-1">
-          <p className="px-2 text-xs text-muted-foreground mb-2">Comunicação · Discord</p>
-          <Button variant="ghost" disabled className="w-full justify-start px-2"><MicOff /> Voz <span className="ml-auto text-xs">Desativada</span></Button>
-          <Button variant="ghost" disabled className="w-full justify-start px-2"><Hash /> Texto <span className="ml-auto text-xs">Desativado</span></Button>
-        </div>
       </nav>
       {myChannel && <div className="mx-2 mb-2 flex items-center justify-between border-t border-sidebar-border pt-2">
         <div className="min-w-0 px-1">
@@ -106,10 +101,19 @@ export function Sidebar({ client }: { client: VoiceClient }) {
           <Button variant={camOn ? "secondary" : "ghost"} title="Webcam" aria-label="Webcam" onClick={() => void toggleCam()} disabled={!ready || camBusy}>{camOn ? <Video /> : <VideoOff />}</Button>
           <Button variant="ghost" title="Usar celular como webcam" aria-label="Usar celular como webcam" onClick={() => setPhoneOpen(true)} disabled={!ready}><Smartphone /></Button>
           <Button variant={sharing ? "secondary" : "ghost"} title={sharing ? "Encerrar transmissão" : "Transmitir tela"} aria-label={sharing ? "Encerrar transmissão" : "Transmitir tela"} onClick={() => void toggleShare()} disabled={!ready || shareBusy}>{sharing ? <MonitorX /> : <MonitorUp />}</Button>
-          <Button variant="ghost" title="Áudio da transmissão" aria-label="Áudio da transmissão" onClick={() => setShareAudioOpen(true)}><AudioLines /></Button>
+          <Button variant="ghost" title="Som do jogo na transmissão" aria-label="Som do jogo na transmissão" onClick={() => setShareAudioOpen(true)}><Gamepad2 /></Button>
         </div>
         {WINDOWS_DOWNLOAD_URL && typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window) && (
-          <a href={WINDOWS_DOWNLOAD_URL} className="mt-2 flex items-center justify-center gap-1 text-xs text-muted-foreground hover:text-foreground"><Download className="h-3 w-3" /> Baixar para Windows</a>
+          <a
+            href={WINDOWS_DOWNLOAD_URL}
+            className="mt-3 flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2.5 hover:bg-primary/20 hover:border-primary transition-colors"
+          >
+            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-primary text-primary-foreground"><Download className="h-4 w-4" /></span>
+            <span className="min-w-0 leading-tight">
+              <span className="block text-sm font-semibold text-foreground">Baixar para Windows</span>
+              <span className="block text-xs text-muted-foreground">App leve para jogar</span>
+            </span>
+          </a>
         )}
       </footer>
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} client={client} />
