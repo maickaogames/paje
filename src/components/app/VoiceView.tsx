@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { HeadphoneOff, LogIn, Maximize2, MicOff, MonitorUp, MonitorX, Volume2, Video as VideoIcon } from "lucide-react";
+import { LogIn, Maximize2, MonitorUp, MonitorX, Volume2, Video as VideoIcon } from "lucide-react";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
@@ -173,7 +173,7 @@ export function VoiceView({ channel, client }: { channel: ChannelId; client: Voi
           <div
             className={cn(
               "grid gap-3",
-              watched ? "grid-flow-col auto-cols-[180px] overflow-x-auto pb-1" : "flex-1 content-center grid-cols-[repeat(auto-fit,minmax(min(100%,260px),1fr))] overflow-y-auto",
+              watched ? "grid-flow-col auto-cols-[180px] overflow-x-auto pb-1" : "flex-1 min-h-0 content-start grid-cols-[repeat(auto-fit,minmax(min(100%,260px),1fr))] overflow-y-auto [scrollbar-gutter:stable]",
             )}
 
           >

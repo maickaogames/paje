@@ -320,7 +320,8 @@ export class VoiceClient {
       }
     }
     this.presenceReady = true;
-    setState({ members });
+    // Só atualiza a tela quando algo visível mudou (evita "tremor" periódico da interface).
+    if (JSON.stringify(members) !== JSON.stringify(previous)) setState({ members });
     const watching = getState().watching;
     if (watching && watching !== this.me && !members[watching]?.screenStream) setState({ watching: null });
   }
@@ -678,7 +679,7 @@ export class VoiceClient {
     if (rtt == null) rtt = (room.engine as unknown as { client?: { rtt?: number } }).client?.rtt;
     if (rtt != null && rtt > 0) {
       const ms = Math.round(rtt > 5 ? rtt : rtt * 1000);
-      setState((s) => ({ pings: { ...s.pings, [this.me]: ms } }));
+      if (getState().pings[this.me] !== ms) setState((s) => ({ pings: { ...s.pings, [this.me]: ms } }));
     }
   }
 
