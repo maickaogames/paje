@@ -1085,8 +1085,12 @@ export class PhoneCamClient {
   async start(facing: "environment" | "user" = "environment") {
     await this.stop();
     try {
-    // Sem pedir resolução: o celular usa a câmera padrão, sem recorte/zoom.
-    this.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing }, audio: false });
+    // Sem resolução pedida o navegador entrega 640x480 recortado do sensor (parece zoom).
+    // Pede o quadro nativo inteiro (resizeMode "none" = sem corte/escala) em alta resolução;
+    // a orientação segue a do celular (retrato/paisagem).
+    const native = { facingMode: facing, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 }, resizeMode: "none" } as MediaTrackConstraints;
+    this.stream = await navigator.mediaDevices.getUserMedia({ video: native, audio: false })
+      .catch(() => navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false }));
     const vt = this.stream.getVideoTracks()[0];
     if (!vt) throw new Error("Câmera não encontrada.");
     const caps = (vt.getCapabilities?.() ?? {}) as { zoom?: { min?: number } };
@@ -1108,7 +1112,8 @@ export class PhoneCamClient {
     await room.localParticipant.publishTrack(vt, {
       source: Track.Source.Camera,
       simulcast: false,
-      videoEncoding: { maxBitrate: 1_500_000, maxFramerate: 30 },
+      videoEncoding: { maxBitrate: 2_500_000, maxFramerate: 30 },
+      degradationPreference: "maintain-resolution",
     });
     this.onState(room.remoteParticipants.size ? "connected" : "waiting");
     return this.stream;
