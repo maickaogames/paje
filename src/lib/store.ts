@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import type { Hotkeys } from "./hotkeys";
 
 /* ---------- Types ---------- */
 
@@ -34,6 +35,24 @@ export interface Settings {
   noiseSuppression: boolean;
   micMonitor: boolean; // ouvir o próprio microfone
   shareProfile?: "performance" | "quality";
+  hotkeys?: Hotkeys;
+  pip?: PipSettings;
+}
+
+export type PipContent = "all" | "screen" | "cams" | "one";
+export interface PipSettings {
+  content: PipContent;
+  peer: string | null; // câmera escolhida no modo "one"
+  includeMe: boolean;
+  corner: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+  size: "small" | "medium" | "large";
+}
+export const DEFAULT_PIP: PipSettings = { content: "all", peer: null, includeMe: false, corner: "bottom-right", size: "medium" };
+export const PIP_SIZES = { small: [360, 220], medium: [480, 300], large: [640, 400] } as const;
+
+export interface UpdateState {
+  phase: "idle" | "checking" | "uptodate" | "downloading" | "restarting" | "error";
+  percent: number;
 }
 
 export interface Member {
@@ -87,6 +106,9 @@ export interface AppState {
   helperStatus: "off" | "connecting" | "ready" | "capturing" | "unavailable";
   helperProcesses: { pid: number; name: string }[];
   helperPid: number | null;
+  pipOpen: boolean;
+  pipWindow: Window | null; // janela Document PiP (versão web)
+  update: UpdateState;
 }
 
 /* ---------- Persistence ---------- */
@@ -153,6 +175,9 @@ const defaults: AppState = {
   helperStatus: "off",
   helperProcesses: [],
   helperPid: null,
+  pipOpen: false,
+  pipWindow: null,
+  update: { phase: "idle", percent: 0 },
 };
 
 /* ---------- Tiny store ---------- */

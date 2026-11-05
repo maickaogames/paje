@@ -201,7 +201,8 @@ export class VoiceClient {
     setState({ hidden });
     const s = getState();
     if (s.settings.powerSave && s.localCam && !s.phoneCamConnected) {
-      s.localCam.getVideoTracks().forEach((t) => (t.enabled = !hidden));
+      // Com o PiP aberto a câmera continua ativa mesmo com a aba em segundo plano.
+      s.localCam.getVideoTracks().forEach((t) => (t.enabled = !hidden || s.pipOpen));
     }
   };
 
@@ -483,7 +484,7 @@ export class VoiceClient {
       .on(RoomEvent.ConnectionQualityChanged, (q, p) => {
         const quality: Quality =
           q === ConnectionQuality.Excellent || q === ConnectionQuality.Good ? "good" : q === ConnectionQuality.Poor ? "fair" : "poor";
-        setState((s) => ({ quality: { ...s.quality, [p.identity]: quality } }));
+        if (getState().quality[p.identity] !== quality) setState((s) => ({ quality: { ...s.quality, [p.identity]: quality } }));
       })
       .on(RoomEvent.Reconnecting, () => {
         if (this.room === room) setState({ voiceStatus: "reconnecting" });
@@ -597,10 +598,13 @@ export class VoiceClient {
     const same = (ms: MediaStream | undefined, t: RemoteTrack | undefined) =>
       t ? ms?.getTracks()[0] === t.mediaStreamTrack : !ms;
     if (prev && same(prev.mic, r?.mic) && same(prev.cam, r?.cam) && same(prev.screen, r?.screen)) return;
+    // Reaproveita o MediaStream que não mudou: recriar todos faz os vídeos piscarem.
+    const keep = (ms: MediaStream | undefined, t: RemoteTrack | undefined) =>
+      t ? (same(ms, t) ? ms : new MediaStream([t.mediaStreamTrack])) : undefined;
     const next: RemoteStreams = {
-      mic: r?.mic ? new MediaStream([r.mic.mediaStreamTrack]) : undefined,
-      cam: r?.cam ? new MediaStream([r.cam.mediaStreamTrack]) : undefined,
-      screen: r?.screen ? new MediaStream([r.screen.mediaStreamTrack]) : undefined,
+      mic: keep(prev?.mic, r?.mic),
+      cam: keep(prev?.cam, r?.cam),
+      screen: keep(prev?.screen, r?.screen),
     };
     setState((s) => ({
       streams: { ...s.streams, [id]: next },

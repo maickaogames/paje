@@ -132,6 +132,14 @@
     color-scheme: dark;
   }
 
+  /* O app ocupa a tela inteira: sem barra de rolagem da página aparecendo e
+     sumindo (causava o "tremor" periódico da interface). */
+  html,
+  body {
+    height: 100%;
+    overflow: hidden;
+  }
+
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
