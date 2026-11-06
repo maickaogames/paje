@@ -9,14 +9,15 @@ import type { VoiceClient } from "@/lib/rtc";
 import { Avatar } from "./Avatar";
 
 /** Video element that pauses in power-save mode when the tab is hidden. */
-function Video({ stream, mirror, className, muted = true }: { stream: MediaStream; mirror?: boolean; className?: string; muted?: boolean }) {
+export function Video({ stream, mirror, className, muted = true }: { stream: MediaStream; mirror?: boolean; className?: string; muted?: boolean }) {
   const ref = useRef<HTMLVideoElement>(null);
   const hidden = useApp((s) => s.hidden);
   const powerSave = useApp((s) => s.settings.powerSave);
+  const pipOpen = useApp((s) => s.pipOpen);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    el.srcObject = stream;
+    if (el.srcObject !== stream) el.srcObject = stream;
     return () => {
       el.srcObject = null;
     };
@@ -24,9 +25,9 @@ function Video({ stream, mirror, className, muted = true }: { stream: MediaStrea
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    if (hidden && powerSave) el.pause();
-    else void el.play().catch(() => {});
-  }, [hidden, powerSave]);
+    if (hidden && powerSave && !pipOpen) el.pause();
+    else if (el.paused) void el.play().catch(() => {});
+  }, [hidden, powerSave, pipOpen]);
   return (
     <video
       ref={ref}
@@ -68,7 +69,7 @@ function Tile({ m, me, client }: { m: Member; me: string; client: VoiceClient })
       <div className="absolute left-2 bottom-2 flex items-center gap-1.5 rounded-md bg-background/70 backdrop-blur px-2 py-1 text-xs">
         <span className="font-medium">{m.nickname}</span>
         {isMe && <span className="text-muted-foreground">(você)</span>}
-        {!isMe && ping != null && <span className="font-mono text-muted-foreground">{ping}ms</span>}
+        {!isMe && ping != null && <span className="inline-block min-w-[3.5rem] font-mono tabular-nums text-muted-foreground">{ping}ms</span>}
         {!isMe && quality && quality !== "good" && (
           <span
             className={cn("h-1.5 w-1.5 rounded-full", quality === "poor" ? "bg-destructive" : "bg-warning")}

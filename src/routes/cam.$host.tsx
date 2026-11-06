@@ -72,7 +72,7 @@ function CamPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col items-center gap-4 p-4">
+    <div className="h-dvh overflow-y-auto bg-background text-foreground flex flex-col items-center gap-4 p-4">
       <h1 className="text-lg font-semibold mt-2">Celular como webcam</h1>
       <div className="w-full max-w-sm aspect-[3/4] rounded-xl overflow-hidden bg-tile grid place-items-center">
         <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-contain" />

@@ -27,7 +27,7 @@ export function SetupModal() {
   }
 
   return (
-    <div className="min-h-screen grid place-items-center bg-background px-4 py-10">
+    <div className="h-dvh overflow-y-auto grid place-items-center bg-background px-4 py-10">
       <form onSubmit={finish} className="panel w-full max-w-md p-8 animate-fade-up">
         <h1 className="text-2xl font-semibold">Quem é você hoje?</h1>
         <p className="text-sm text-muted-foreground mt-1">Sem conta, sem cadastro. Só um apelido temporário.</p>

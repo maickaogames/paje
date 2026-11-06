@@ -12,3 +12,5 @@
 - Keep temporary communication switches and media subscription/capture rules in `src/lib/media-policy.ts`, shared by client and server, so disabled features cannot publish or execute through hidden controls.
 - LiveKit subscribes to cameras in the room and screen tracks only for the selected watcher; screen playback is guarded separately to prevent race-condition audio leaks.
 - Enumerate devices without opening hardware; acquire cameras only on explicit action and clean up failed publication/connection attempts.
+- Desktop-only features (PiP window mode, global hotkeys, updater) go through Rust commands in `src-tauri/src/desktop.rs` called via `src/lib/desktop.ts`; the remote-loaded web UI must no-op when `window.__TAURI__` is absent.
+- Updates compare the CI run number baked in as `PAJE_BUILD` against `latest.json` published with each Release, so no manual version bumps are needed.

@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { Download, Activity, Gamepad2, LogOut, MonitorUp, MonitorX, Settings, Smartphone, Video, VideoOff } from "lucide-react";
+import { Download, Activity, PictureInPicture2, Gamepad2, LogOut, MonitorUp, MonitorX, Settings, Smartphone, Video, VideoOff } from "lucide-react";
 import { toast } from "sonner";
 import logo from "@/assets/paje-logo.png";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { VOICE_CHANNELS, useApp } from "@/lib/store";
+import { togglePip } from "@/lib/pip";
 import { cameraErrorMessage } from "@/lib/media";
 import type { VoiceClient } from "@/lib/rtc";
 import { Avatar } from "./Avatar";
@@ -24,6 +25,7 @@ export function Sidebar({ client }: { client: VoiceClient }) {
   const devices = useApp((s) => s.devices);
   const connected = useApp((s) => s.connected);
   const status = useApp((s) => s.voiceStatus);
+  const pipOpen = useApp((s) => s.pipOpen);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [phoneOpen, setPhoneOpen] = useState(false);
   const [shareAudioOpen, setShareAudioOpen] = useState(false);
@@ -97,11 +99,12 @@ export function Sidebar({ client }: { client: VoiceClient }) {
           <div className="min-w-0 flex-1"><p className="text-sm font-medium truncate">{profile.nickname}</p><p className="text-xs text-muted-foreground">{camOn ? "Câmera ligada" : "Câmera desligada"}</p></div>
           <Button variant="ghost" size="icon" title="Configurações" aria-label="Configurações" onClick={() => setSettingsOpen(true)}><Settings /></Button>
         </div>
-        <div className="grid grid-cols-4 gap-1">
+        <div className="grid grid-cols-5 gap-1">
           <Button variant={camOn ? "secondary" : "ghost"} title="Webcam" aria-label="Webcam" onClick={() => void toggleCam()} disabled={!ready || camBusy}>{camOn ? <Video /> : <VideoOff />}</Button>
           <Button variant="ghost" title="Usar celular como webcam" aria-label="Usar celular como webcam" onClick={() => setPhoneOpen(true)} disabled={!ready}><Smartphone /></Button>
           <Button variant={sharing ? "secondary" : "ghost"} title={sharing ? "Encerrar transmissão" : "Transmitir tela"} aria-label={sharing ? "Encerrar transmissão" : "Transmitir tela"} onClick={() => void toggleShare()} disabled={!ready || shareBusy}>{sharing ? <MonitorX /> : <MonitorUp />}</Button>
           <Button variant="ghost" title="Som do jogo na transmissão" aria-label="Som do jogo na transmissão" onClick={() => setShareAudioOpen(true)}><Gamepad2 /></Button>
+          <Button variant={pipOpen ? "secondary" : "ghost"} title="Picture-in-Picture" aria-label="Picture-in-Picture" onClick={() => void togglePip()}><PictureInPicture2 /></Button>
         </div>
         {WINDOWS_DOWNLOAD_URL && typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window) && (
           <a

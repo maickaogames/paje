@@ -28,7 +28,7 @@ export function PasswordGate() {
   }
 
   return (
-    <div className="min-h-screen grid place-items-center bg-background px-4">
+    <div className="h-dvh overflow-y-auto grid place-items-center bg-background px-4">
       <form onSubmit={submit} className="panel w-full max-w-sm p-8 animate-fade-up">
         <div className="flex items-center gap-3 mb-6">
           <img src={logo} alt="Pajé" className="h-12 w-12 rounded-lg object-contain" />
