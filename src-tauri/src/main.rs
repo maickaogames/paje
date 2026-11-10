@@ -8,6 +8,15 @@ mod desktop;
 
 fn main() {
     tauri::Builder::default()
+        // Deve ser o primeiro plugin: uma segunda abertura apenas foca a janela existente.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            use tauri::Manager;
+            if let Some(w) = app.get_webview_window("main").or_else(|| app.webview_windows().into_values().next()) {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(capture::CaptureState::default())
         .manage(desktop::PipState::default())

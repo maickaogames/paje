@@ -200,7 +200,8 @@ export class VoiceClient {
     const hidden = document.visibilityState === "hidden";
     setState({ hidden });
     const s = getState();
-    if (s.settings.powerSave && s.localCam && !s.phoneCamConnected) {
+    // Durante transmissão/chamada a câmera não é pausada no Alt+Tab (pausar derrubava a publicação).
+    if (s.settings.powerSave && s.localCam && !s.phoneCamConnected && !s.myChannel) {
       // Com o PiP aberto a câmera continua ativa mesmo com a aba em segundo plano.
       s.localCam.getVideoTracks().forEach((t) => (t.enabled = !hidden || s.pipOpen));
     }
@@ -323,8 +324,8 @@ export class VoiceClient {
     this.presenceReady = true;
     // Só atualiza a tela quando algo visível mudou (evita "tremor" periódico da interface).
     if (JSON.stringify(members) !== JSON.stringify(previous)) setState({ members });
-    const watching = getState().watching;
-    if (watching && watching !== this.me && !members[watching]?.screenStream) setState({ watching: null });
+    // Fechar a transmissão assistida fica a cargo do LiveKit (TrackUnpublished/desconexão);
+    // oscilações de presença não devem mais derrubar a tela dos espectadores.
   }
 
   /* ---------------- canais de voz (LiveKit) ---------------- */
@@ -881,7 +882,9 @@ export class VoiceClient {
     this.pubs.cam = await this.room.localParticipant.publishTrack(t, {
       source: Track.Source.Camera,
       name: "cam",
-      simulcast: true,
+      // Mesmo codec da transmissão (H.264): evita dois codificadores diferentes na GPU.
+      videoCodec: "h264",
+      simulcast: !getState().sharing,
       videoEncoding: { maxBitrate: 900_000, maxFramerate: 24 },
     });
   }
@@ -1016,7 +1019,11 @@ export class VoiceClient {
     const v = stream.getVideoTracks()[0];
     if (v) {
       v.contentHint = "motion";
-      v.onended = () => void this.stopShare();
+      v.onended = () => {
+        if (getState().localScreen !== stream) return;
+        void this.stopShare();
+        toast("A transmissão foi encerrada pelo Windows (janela fechada/minimizada ou troca de tela cheia). Prefira compartilhar a tela inteira em jogos.");
+      };
     }
     setState({ localScreen: stream, sharing: true });
     try { await this.publishScreen(stream); }
