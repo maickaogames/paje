@@ -22,13 +22,13 @@ import { getState, useApp } from "@/lib/store";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Pajé — Bem-vindos à tribo Akidauânus!" },
+      { title: "Pajé — yvy’ã ra’ tupá xere fuma" },
       {
         name: "description",
         content:
           "Compartilhamento de tela e câmeras para jogar com amigos junto ao Discord, sem cadastro e com baixo consumo de CPU.",
       },
-      { property: "og:title", content: "Pajé — Bem-vindos à tribo Akidauânus!" },
+      { property: "og:title", content: "Pajé — yvy’ã ra’ tupá xere fuma" },
       {
         property: "og:description",
         content: "Entre com a senha do grupo, compartilhe a tela e veja seus amigos pela webcam ou câmera do celular.",

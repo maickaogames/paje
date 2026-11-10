@@ -102,15 +102,60 @@ function ScreenViewer({ owner, me, client }: { owner: Member; me: string; client
   const isMe = owner.peerId === me;
   const stream = isMe ? local : remote;
   const boxRef = useRef<HTMLDivElement>(null);
+  const [full, setFull] = useState(false);
+  const cams = useApp((s) => s.members);
+  const streams = useApp((s) => s.streams);
+  const localCam = useApp((s) => s.localCam);
+  const camList = Object.values(cams)
+    .filter((m) => m.channel === owner.channel)
+    .map((m) => ({ m, cam: m.peerId === me ? localCam : streams[m.peerId]?.cam }))
+    .filter((x): x is { m: Member; cam: MediaStream } => !!x.cam);
+
+  useEffect(() => {
+    const onChange = () => { if (!document.fullscreenElement) setFull(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFull(false); };
+    document.addEventListener("fullscreenchange", onChange);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("fullscreenchange", onChange);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, []);
+
+  const toggleFull = async () => {
+    if (full) {
+      setFull(false);
+      if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
+      return;
+    }
+    setFull(true);
+    await boxRef.current?.requestFullscreen?.().catch(() => {});
+  };
 
   return (
-    <div ref={boxRef} className="relative flex-1 min-h-0 rounded-xl bg-background overflow-hidden group">
+    <div
+      ref={boxRef}
+      className={cn(
+        "relative bg-background overflow-hidden",
+        full ? "fixed inset-0 z-50 rounded-none" : "flex-1 min-h-0 rounded-xl",
+      )}
+    >
       {stream ? (
         <Video stream={stream} className="object-contain" />
       ) : (
         <div className="h-full grid place-items-center text-muted-foreground text-sm">Conectando à transmissão…</div>
       )}
-      <div className="absolute inset-x-0 bottom-0 p-3 flex flex-wrap items-center gap-2 bg-background/90">
+      {full && camList.length > 0 && (
+        <div className="absolute right-3 top-3 z-10 flex flex-col gap-2 w-44 max-h-[70%] overflow-y-auto pointer-events-none">
+          {camList.map(({ m, cam }) => (
+            <div key={m.peerId} className="relative aspect-video rounded-lg overflow-hidden border border-border shadow-lg">
+              <Video stream={cam} mirror={m.peerId === me} />
+              <span className="absolute left-1 bottom-1 rounded bg-background/80 px-1.5 text-[10px]">{m.nickname}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="absolute inset-x-0 bottom-0 z-20 p-3 flex flex-wrap items-center gap-2 bg-background/90">
         <span className="text-sm font-medium">{owner.nickname} está transmitindo</span>
         <span className="flex-1" />
         {!isMe && (
@@ -119,15 +164,15 @@ function ScreenViewer({ owner, me, client }: { owner: Member; me: string; client
             <Slider min={0} max={1} step={0.05} value={[screenVolume]} onValueChange={([v]) => client.setScreenVolume(v ?? 1)} />
           </div>
         )}
-        <Button size="sm" variant="secondary" onClick={() => void boxRef.current?.requestFullscreen?.()}>
-          <Maximize2 /> Tela cheia
+        <Button size="sm" variant="secondary" onClick={() => void toggleFull()}>
+          {full ? <><Minimize2 /> Sair da tela cheia</> : <><Maximize2 /> Tela cheia</>}
         </Button>
         {isMe ? (
           <Button size="sm" variant="destructive" onClick={() => void client.stopShare()}>
             <MonitorX /> Encerrar transmissão
           </Button>
         ) : (
-          <Button size="sm" variant="ghost" onClick={() => setState({ watching: null })}>
+          <Button size="sm" variant="ghost" onClick={() => { if (document.fullscreenElement) void document.exitFullscreen().catch(() => {}); setFull(false); setState({ watching: null }); }}>
             Fechar
           </Button>
         )}

@@ -34,7 +34,7 @@ export function PasswordGate() {
           <img src={logo} alt="Pajé" className="h-12 w-12 rounded-lg object-contain" />
           <div>
             <h1 className="font-display text-xl font-semibold leading-tight">Pajé</h1>
-            <p className="text-xs text-muted-foreground">Bem-vindos à tribo Akidauânus!</p>
+            <p className="text-xs text-muted-foreground">yvy’ã ra’ tupá xere fuma</p>
           </div>
         </div>
         <label className="text-sm text-muted-foreground mb-2 block">Senha do grupo</label>

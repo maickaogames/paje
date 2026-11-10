@@ -78,13 +78,13 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Pajé — Bem-vindos à tribo Akidauânus!" },
+      { title: "Pajé — yvy’ã ra’ tupá xere fuma" },
       {
         name: "description",
-        content: "Bem-vindos à tribo Akidauânus! Câmeras e transmissão de tela leves para jogar com os amigos junto ao Discord.",
+        content: "yvy’ã ra’ tupá xere fuma Câmeras e transmissão de tela leves para jogar com os amigos junto ao Discord.",
       },
       { name: "theme-color", content: "#12100e" },
-      { property: "og:title", content: "Pajé — Bem-vindos à tribo Akidauânus!" },
+      { property: "og:title", content: "Pajé — yvy’ã ra’ tupá xere fuma" },
       {
         property: "og:description",
         content: "Câmeras e transmissão de tela leves para jogar com os amigos junto ao Discord.",

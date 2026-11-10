@@ -645,6 +645,8 @@ export class VoiceClient {
 
   setScreenVolume(v: number) {
     setState({ screenVolume: v });
+    const vol = Math.min(1, Math.max(0, v));
+    this.remote.forEach((r) => { if (r.screenEl) r.screenEl.volume = vol; });
     this.room?.remoteParticipants.forEach((p) => p.setVolume(Math.min(1, Math.max(0, v)), Track.Source.ScreenShareAudio));
   }
 

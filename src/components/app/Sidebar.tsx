@@ -55,7 +55,7 @@ export function Sidebar({ client }: { client: VoiceClient }) {
   return (
     <aside className="w-60 max-sm:w-44 shrink-0 bg-sidebar text-sidebar-foreground flex flex-col border-r border-sidebar-border">
       <header className="h-12 px-3 flex items-center justify-between border-b border-sidebar-border">
-        <span className="flex items-center gap-2 font-display font-semibold" title="Bem-vindos à tribo Akidauânus!">
+        <span className="flex items-center gap-2 font-display font-semibold" title="yvy’ã ra’ tupá xere fuma">
           <img src={logo} alt="" className="h-7 w-7 object-contain" /> Pajé
         </span>
         <Activity className={cn("h-4 w-4", connected ? "text-online" : "text-warning")} aria-label={connected ? "Online" : "Reconectando"} />
