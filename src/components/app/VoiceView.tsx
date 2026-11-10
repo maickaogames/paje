@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { LogIn, Maximize2, MonitorUp, MonitorX, Volume2, Video as VideoIcon } from "lucide-react";
+import { LogIn, Maximize2, Minimize2, MonitorUp, MonitorX, Volume2, Video as VideoIcon } from "lucide-react";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
