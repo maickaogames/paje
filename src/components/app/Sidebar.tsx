@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Download, Activity, PictureInPicture2, Gamepad2, LogOut, MonitorUp, MonitorX, Settings, Smartphone, Video, VideoOff } from "lucide-react";
+import { Download, RefreshCw, Activity, PictureInPicture2, Gamepad2, LogOut, MonitorUp, MonitorX, Settings, Smartphone, Video, VideoOff } from "lucide-react";
 import { toast } from "sonner";
 import logo from "@/assets/paje-logo.png";
 import { Button } from "@/components/ui/button";
@@ -117,6 +117,19 @@ export function Sidebar({ client }: { client: VoiceClient }) {
               <span className="block text-xs text-muted-foreground">App leve para jogar</span>
             </span>
           </a>
+        )}
+        {typeof window !== "undefined" && "__TAURI_INTERNALS__" in window && (
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="mt-3 flex w-full items-center gap-3 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2.5 text-left hover:bg-primary/20 hover:border-primary transition-colors"
+          >
+            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-primary text-primary-foreground"><RefreshCw className="h-4 w-4" /></span>
+            <span className="min-w-0 leading-tight">
+              <span className="block text-sm font-semibold text-foreground">Recarregar tela</span>
+              <span className="block text-xs text-muted-foreground">Use se algo travar ou piscar</span>
+            </span>
+          </button>
         )}
       </footer>
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} client={client} />
