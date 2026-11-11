@@ -1,3 +1,4 @@
+import type React from "react";
 import { useEffect, useRef, useState } from "react";
 import { LogIn, Maximize2, Minimize2, MonitorUp, MonitorX, Volume2, Video as VideoIcon } from "lucide-react";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -7,9 +8,10 @@ import { cn } from "@/lib/utils";
 import { VOICE_CHANNELS, setState, useApp, type ChannelId, type Member } from "@/lib/store";
 import type { VoiceClient } from "@/lib/rtc";
 import { Avatar } from "./Avatar";
+import { camFxStyle } from "@/lib/camfx";
 
 /** Video element that pauses in power-save mode when the tab is hidden. */
-export function Video({ stream, mirror, className, muted = true }: { stream: MediaStream; mirror?: boolean; className?: string; muted?: boolean }) {
+export function Video({ stream, mirror, className, muted = true, style }: { stream: MediaStream; mirror?: boolean; className?: string; muted?: boolean; style?: React.CSSProperties }) {
   const ref = useRef<HTMLVideoElement>(null);
   const hidden = useApp((s) => s.hidden);
   const powerSave = useApp((s) => s.settings.powerSave);
@@ -34,6 +36,7 @@ export function Video({ stream, mirror, className, muted = true }: { stream: Med
       autoPlay
       playsInline
       muted={muted}
+      style={style}
       className={cn("h-full w-full object-cover bg-background", mirror && "-scale-x-100", className)}
     />
   );
@@ -49,6 +52,7 @@ function Tile({ m, me, client }: { m: Member; me: string; client: VoiceClient })
   const ping = useApp((s) => s.pings[m.peerId]);
   const quality = useApp((s) => s.quality[m.peerId]);
   const isMe = m.peerId === me;
+  const myFx = useApp((s) => s.settings.camFx);
   const cam = isMe ? localCam : remote?.cam;
   const hasScreen = isMe ? localSharing : !!m.screenStream;
 
@@ -62,7 +66,7 @@ function Tile({ m, me, client }: { m: Member; me: string; client: VoiceClient })
     >
       {cam ? (
         // object-contain preserva o enquadramento original da câmera (sem recorte/zoom).
-        <Video stream={cam} mirror={isMe && !phoneCam} className="object-contain" />
+        <Video stream={cam} className="object-contain" style={camFxStyle(isMe ? myFx : m.camFx, isMe && !phoneCam)} />
       ) : (
         <Avatar src={m.avatar} name={m.nickname} size={88} />
       )}
@@ -96,6 +100,8 @@ function useAppPhone() {
 }
 
 function ScreenViewer({ owner, me, client }: { owner: Member; me: string; client: VoiceClient }) {
+  const myFxAll = useApp((s) => s.settings.camFx);
+  const phoneOn = useApp((s) => s.phoneCamConnected);
   const remote = useApp((s) => s.streams[owner.peerId]?.screen);
   const local = useApp((s) => s.localScreen);
   const screenVolume = useApp((s) => s.screenVolume);
@@ -149,7 +155,7 @@ function ScreenViewer({ owner, me, client }: { owner: Member; me: string; client
         <div className="absolute right-3 top-3 z-10 flex flex-col gap-2 w-44 max-h-[70%] overflow-y-auto pointer-events-none">
           {camList.map(({ m, cam }) => (
             <div key={m.peerId} className="relative aspect-video rounded-lg overflow-hidden border border-border shadow-lg">
-              <Video stream={cam} mirror={m.peerId === me} />
+              <Video stream={cam} style={camFxStyle(m.peerId === me ? myFxAll : m.camFx, m.peerId === me && !phoneOn)} />
               <span className="absolute left-1 bottom-1 rounded bg-background/80 px-1.5 text-[10px]">{m.nickname}</span>
             </div>
           ))}

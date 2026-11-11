@@ -22,6 +22,7 @@ export function ShareAudioDialog({
   const status = useApp((s) => s.helperStatus);
   const processes = useApp((s) => s.helperProcesses);
   const pid = useApp((s) => s.helperPid);
+  const sharing = useApp((s) => s.sharing);
 
   useEffect(() => {
     if (!open) return;
@@ -70,7 +71,8 @@ export function ShareAudioDialog({
               onValueChange={(v) => {
                 const n = Number(v);
                 setState({ helperPid: n });
-                client.helper.selectProcess(n);
+                // Durante a transmissão troca o som na hora; antes dela só memoriza a escolha.
+                void client.changeShareAudio(n);
               }}
             >
               <SelectTrigger>
@@ -86,7 +88,7 @@ export function ShareAudioDialog({
             </Select>
             <div className="flex items-center justify-between">
               <p className="text-xs text-muted-foreground">
-                {status === "capturing" ? "Capturando o áudio do programa selecionado." : "A captura começa ao transmitir a tela."}
+                {status === "capturing" ? "Capturando o áudio do programa selecionado." : sharing ? "Escolha um programa para enviar o som agora mesmo." : "A captura começa ao transmitir a tela."}
               </p>
               <Button variant="ghost" size="sm" onClick={() => client.helper.refreshProcesses()}>
                 <RefreshCw className="h-3.5 w-3.5" /> Atualizar lista

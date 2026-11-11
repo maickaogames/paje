@@ -17,6 +17,40 @@ fn err<E: std::fmt::Display>(e: E) -> String {
 #[derive(Default)]
 pub struct PipState(Mutex<Option<(PhysicalPosition<i32>, PhysicalSize<u32>, bool)>>);
 
+/// Enquanto o PiP estiver aberto, reafirma a janela como TOPMOST: jogos e
+/// outros programas que pedem "sempre no topo" depois não conseguem cobri-la.
+static PIP_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(windows)]
+fn force_topmost(window: &WebviewWindow) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+    };
+    if let Ok(h) = window.hwnd() {
+        let hwnd = HWND(h.0 as _);
+        unsafe {
+            let _ = SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        }
+    }
+}
+#[cfg(not(windows))]
+fn force_topmost(_window: &WebviewWindow) {}
+
+fn keep_on_top(window: WebviewWindow) {
+    use std::sync::atomic::Ordering;
+    if PIP_ON.swap(true, Ordering::SeqCst) {
+        return; // já existe um vigia rodando
+    }
+    std::thread::spawn(move || {
+        while PIP_ON.load(Ordering::SeqCst) {
+            let w = window.clone();
+            let _ = window.run_on_main_thread(move || force_topmost(&w));
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+        }
+    });
+}
+
 #[tauri::command]
 pub fn set_pip_mode(
     window: WebviewWindow,
@@ -52,7 +86,12 @@ pub fn set_pip_mode(
             let y = if corner.starts_with("top") { my + margin } else { my + mh - h - taskbar };
             window.set_position(PhysicalPosition::new(x, y)).map_err(err)?;
         }
+        let _ = window.set_visible_on_all_workspaces(true);
+        force_topmost(&window);
+        keep_on_top(window.clone());
     } else {
+        PIP_ON.store(false, std::sync::atomic::Ordering::SeqCst);
+        let _ = window.set_visible_on_all_workspaces(false);
         window.set_always_on_top(false).map_err(err)?;
         window.set_decorations(true).map_err(err)?;
         if let Some((pos, size, max)) = saved.take() {

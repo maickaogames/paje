@@ -13,6 +13,8 @@ import { DEFAULT_HOTKEYS, HOTKEY_LABELS, comboFromEvent, comboLabel, type Hotkey
 import { isDesktop } from "@/lib/desktop";
 import { runUpdate } from "@/lib/updater";
 import type { VoiceClient } from "@/lib/rtc";
+import { DEFAULT_CAMFX, camFxStyle, type CamFx } from "@/lib/camfx";
+import { Video } from "./VoiceView";
 
 function KeyPicker({ value, onChange }: { value: string; onChange: (code: string) => void }) {
   const [listening, setListening] = useState(false);
@@ -49,6 +51,10 @@ export function SettingsDialog({
   const settings = useApp((s) => s.settings);
   const devices = useApp((s) => s.devices);
   const camOn = useApp((s) => s.camOn);
+  const localCam = useApp((s) => s.localCam);
+  const phoneCam = useApp((s) => s.phoneCamConnected);
+  const fx = settings.camFx ?? DEFAULT_CAMFX;
+  const setFx = (f: Partial<CamFx>) => patch({ camFx: { ...fx, ...f } });
 
   const members = useApp((s) => s.members);
   const me = useApp((s) => s.profile?.peerId);
@@ -69,6 +75,8 @@ export function SettingsDialog({
     if ("ptt" in p) client.applyMicEnabled();
     if ("micGain" in p || "micMonitor" in p) client.applyMicTuning();
     if ("noiseSuppression" in p) void client.reopenMic();
+    // Outros participantes aplicam os mesmos ajustes ao ver sua câmera.
+    if ("camFx" in p) void client.publishPresence();
   }
 
   // Desliga o monitoramento ao fechar as configurações, para não gerar eco.
@@ -107,6 +115,37 @@ export function SettingsDialog({
         <section className="space-y-3">
           <h3 className="text-sm font-semibold">Periféricos</h3>
           <DeviceForm value={devices} onChange={(d) => void changeDevices(d)} />
+        </section>
+
+                <section className="space-y-3 pt-4 border-t">
+          <h3 className="text-sm font-semibold">Ajustes da câmera</h3>
+          <p className="text-xs text-muted-foreground">Valem para a webcam e para o celular. Todos na sala veem sua câmera com estes ajustes.</p>
+          <div className="aspect-video rounded-lg overflow-hidden bg-tile grid place-items-center">
+            {localCam ? (
+              <Video stream={localCam} className="object-contain" style={camFxStyle(fx, !phoneCam)} />
+            ) : (
+              <span className="text-xs text-muted-foreground">Ligue a câmera para ver a prévia.</span>
+            )}
+          </div>
+          <Row label={`Zoom (${fx.zoom.toFixed(1)}x)`}>
+            <div className="w-40"><Slider min={1} max={3} step={0.1} value={[fx.zoom]} onValueChange={([v]) => setFx({ zoom: v ?? 1 })} /></div>
+          </Row>
+          <Row label={`Brilho (${Math.round(fx.brightness * 100)}%)`}>
+            <div className="w-40"><Slider min={0.5} max={1.5} step={0.05} value={[fx.brightness]} onValueChange={([v]) => setFx({ brightness: v ?? 1 })} /></div>
+          </Row>
+          <Row label={`Contraste (${Math.round(fx.contrast * 100)}%)`}>
+            <div className="w-40"><Slider min={0.5} max={1.5} step={0.05} value={[fx.contrast]} onValueChange={([v]) => setFx({ contrast: v ?? 1 })} /></div>
+          </Row>
+          <Row label={`Saturação (${Math.round(fx.saturation * 100)}%)`}>
+            <div className="w-40"><Slider min={0} max={2} step={0.05} value={[fx.saturation]} onValueChange={([v]) => setFx({ saturation: v ?? 1 })} /></div>
+          </Row>
+          <Row label="Girar imagem">
+            <Pick value={String(fx.rotate) as "0" | "90" | "180" | "270"} onChange={(r) => setFx({ rotate: Number(r) as CamFx["rotate"] })} options={[["0", "0°"], ["90", "90°"], ["180", "180°"], ["270", "270°"]]} />
+          </Row>
+          <Row label="Espelhar imagem" hint="Inverte a esquerda e a direita para todos">
+            <Switch checked={fx.mirror} onCheckedChange={(mirror) => setFx({ mirror })} />
+          </Row>
+          <Button variant="outline" size="sm" onClick={() => patch({ camFx: DEFAULT_CAMFX })}>Restaurar padrões</Button>
         </section>
 
         {MEDIA_FEATURES.voice && <>

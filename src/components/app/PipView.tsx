@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { DEFAULT_PIP, useApp } from "@/lib/store";
 import { closePip } from "@/lib/pip";
 import { Video } from "./VoiceView";
+import { camFxStyle, type CamFx } from "@/lib/camfx";
 
 /** Conteúdo do Picture-in-Picture: transmissão assistida e/ou câmeras, conforme as configurações. */
 export function PipView() {
@@ -15,12 +16,13 @@ export function PipView() {
   const localCam = useApp((s) => s.localCam);
   const localScreen = useApp((s) => s.localScreen);
   const phoneCam = useApp((s) => s.phoneCamConnected);
+  const myFx = useApp((s) => s.settings.camFx);
 
   const screen = watching ? (watching === me ? localScreen : streams[watching]?.screen) : undefined;
   const cams = Object.values(members)
     .filter((m) => m.channel === myChannel && (m.peerId !== me || pip.includeMe || pip.content === "one"))
-    .map((m) => ({ id: m.peerId, name: m.nickname, stream: m.peerId === me ? localCam : streams[m.peerId]?.cam }))
-    .filter((c): c is { id: string; name: string; stream: MediaStream } => !!c.stream);
+    .map((m) => ({ id: m.peerId, name: m.nickname, stream: m.peerId === me ? localCam : streams[m.peerId]?.cam, fx: m.peerId === me ? myFx : m.camFx }))
+    .filter((c): c is { id: string; name: string; stream: MediaStream; fx: CamFx | undefined } => !!c.stream);
 
   const showScreen = (pip.content === "all" || pip.content === "screen") && screen;
   let camList = pip.content === "all" || pip.content === "cams" ? cams : [];
@@ -38,7 +40,7 @@ export function PipView() {
             <div className="absolute right-1.5 bottom-1.5 flex gap-1.5">
               {camList.slice(0, 4).map((c) => (
                 <div key={c.id} className="h-16 aspect-video rounded-md overflow-hidden bg-tile ring-1 ring-border">
-                  <Video stream={c.stream} mirror={c.id === me && !phoneCam} className="object-contain" />
+                  <Video stream={c.stream} className="object-contain" style={camFxStyle(c.fx, c.id === me && !phoneCam)} />
                 </div>
               ))}
             </div>
@@ -48,7 +50,7 @@ export function PipView() {
         <div className={cn("grid h-full w-full gap-1 p-1", camList.length > 1 && "grid-cols-2")}>
           {camList.map((c) => (
             <div key={c.id} className="relative min-h-0 rounded-md overflow-hidden bg-tile">
-              <Video stream={c.stream} mirror={c.id === me && !phoneCam} className="object-contain" />
+              <Video stream={c.stream} className="object-contain" style={camFxStyle(c.fx, c.id === me && !phoneCam)} />
               <span className="absolute left-1 bottom-1 rounded bg-background/70 px-1.5 text-[11px]">{c.name}</span>
             </div>
           ))}

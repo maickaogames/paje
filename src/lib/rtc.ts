@@ -28,6 +28,7 @@ import { getState, setState, type ChannelId, type Member, type RemoteStreams, VO
 import { sfx } from "./sfx";
 import { MEDIA_FEATURES, allowScreenAudio, shareProfileParams, safeScreenAudio, shouldPlayScreenAudio, shouldSubscribeMedia } from "./media-policy";
 import { HelperAudioClient } from "./audio-helper";
+import { normalizeCamFx, type CamFx } from "./camfx";
 import { acquireCamera, cameraErrorMessage } from "./media";
 import { getPhoneCamToken, getPhoneHostToken, getVoiceToken } from "./livekit.functions";
 
@@ -46,6 +47,7 @@ interface PresenceEntry {
   micStream: string | null;
   camStream: string | null;
   screenStream: string | null;
+  camFx?: CamFx | undefined;
   /** Momento da última atualização — descarta estados antigos fora de ordem. */
   at: number;
 }
@@ -267,6 +269,7 @@ export class VoiceClient {
       micStream: this.pubs.mic ? "mic" : null,
       camStream: s.localCam ? "cam" : null,
       screenStream: s.localScreen ? "screen" : null,
+      camFx: s.settings.camFx,
       at: Date.now(),
     };
   }
@@ -300,6 +303,7 @@ export class VoiceClient {
         micStream: entry.micStream,
         camStream: entry.camStream,
         screenStream: entry.screenStream,
+        camFx: entry.camFx ? normalizeCamFx(entry.camFx) : undefined,
       };
     }
     const previous = getState().members;
@@ -1063,6 +1067,30 @@ export class VoiceClient {
     }
   }
 
+  /** Troca (ou remove) o programa cujo som vai na transmissão, sem reiniciar o vídeo. */
+  async changeShareAudio(pid: number | null) {
+    if (pid != null) this.helper.selectProcess(pid);
+    const s = getState();
+    if (!s.sharing || !s.localScreen || !this.room) return;
+    const lp = this.room.localParticipant;
+    const old = this.pubs.screenAudio?.track;
+    this.pubs.screenAudio = undefined;
+    if (old) await lp.unpublishTrack(old, false).catch(() => {});
+    await this.helper.stopCapture();
+    this.shareAudioTrack = null;
+    if (pid == null || !(this.helper.status === "ready" || this.helper.status === "capturing")) return;
+    try {
+      this.shareAudioTrack = await this.helper.startCapture();
+      if (this.shareAudioTrack) {
+        await this.publishScreen(s.localScreen);
+        toast("Áudio da transmissão trocado para o programa selecionado.");
+      }
+    } catch (e) {
+      toast.error("Não foi possível capturar o áudio desse programa.");
+      console.warn("[share-audio]", e);
+    }
+  }
+
   async stopShare(publish = true) {
     const s = getState();
     if (!s.localScreen) return;
@@ -1101,15 +1129,21 @@ export class PhoneCamClient {
     // Sem resolução pedida o navegador entrega 640x480 recortado do sensor (parece zoom).
     // Pede o quadro nativo inteiro (resizeMode "none" = sem corte/escala) em alta resolução;
     // a orientação segue a do celular (retrato/paisagem).
-    const native = { facingMode: facing, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 }, resizeMode: "none" } as MediaTrackConstraints;
-    this.stream = await navigator.mediaDevices.getUserMedia({ video: native, audio: false })
-      .catch(() => navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false }));
+    // Pede o quadro inteiro do sensor (4:3 nativo, sem recorte para 16:9 e sem escala).
+    // Não forçamos 16:9: isso fazia o navegador cortar o sensor e parecia zoom.
+    const native = { facingMode: { exact: facing }, width: { ideal: 1920 }, height: { ideal: 1440 }, aspectRatio: { ideal: 4 / 3 }, frameRate: { ideal: 30 }, resizeMode: "none" } as MediaTrackConstraints;
+    const gum = (v: MediaTrackConstraints) => navigator.mediaDevices.getUserMedia({ video: v, audio: false });
+    this.stream = await gum(native)
+      .catch(() => gum({ ...native, facingMode: facing }))
+      .catch(() => gum({ facingMode: facing }));
     const vt = this.stream.getVideoTracks()[0];
     if (!vt) throw new Error("Câmera não encontrada.");
-    const caps = (vt.getCapabilities?.() ?? {}) as { zoom?: { min?: number } };
-    if (caps.zoom?.min != null) {
-      await vt.applyConstraints({ advanced: [{ zoom: caps.zoom.min }] } as unknown as MediaTrackConstraints).catch(() => {});
-    }
+    // Campo de visão total: zoom óptico/digital no mínimo e sem efeitos do navegador.
+    const caps = (vt.getCapabilities?.() ?? {}) as { zoom?: { min?: number }; resizeMode?: string[] };
+    const adv: Record<string, unknown> = {};
+    if (caps.zoom?.min != null) adv["zoom"] = caps.zoom.min;
+    if (caps.resizeMode?.includes("none")) adv["resizeMode"] = "none";
+    if (Object.keys(adv).length) await vt.applyConstraints({ advanced: [adv] } as unknown as MediaTrackConstraints).catch(() => {});
     vt.onended = () => { void this.stop(); this.onState("disconnected"); };
     this.onState("connecting");
     const { url, jwt } = await getPhoneCamToken({ data: { key: this.key, host: this.host } });

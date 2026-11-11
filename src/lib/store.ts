@@ -1,3 +1,4 @@
+import type { CamFx } from "./camfx";
 import { useSyncExternalStore } from "react";
 import type { Hotkeys } from "./hotkeys";
 
@@ -37,6 +38,7 @@ export interface Settings {
   shareProfile?: "performance" | "quality";
   hotkeys?: Hotkeys;
   pip?: PipSettings;
+  camFx?: CamFx;
 }
 
 export type PipContent = "all" | "screen" | "cams" | "one";
@@ -65,6 +67,7 @@ export interface Member {
   micStream: string | null;
   camStream: string | null;
   screenStream: string | null;
+  camFx?: CamFx | undefined;
 }
 
 export interface RemoteStreams {
