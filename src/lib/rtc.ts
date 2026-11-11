@@ -1131,7 +1131,10 @@ export class PhoneCamClient {
     // a orientação segue a do celular (retrato/paisagem).
     // Pede o quadro inteiro do sensor (4:3 nativo, sem recorte para 16:9 e sem escala).
     // Não forçamos 16:9: isso fazia o navegador cortar o sensor e parecia zoom.
-    const native = { facingMode: { exact: facing }, width: { ideal: 1920 }, height: { ideal: 1440 }, aspectRatio: { ideal: 4 / 3 }, frameRate: { ideal: 30 }, resizeMode: "none" } as MediaTrackConstraints;
+    // Retrato: pede quadro vertical (3:4); paisagem: horizontal (4:3). Sem isso o
+    // navegador recorta o sensor vertical para caber num quadro deitado (efeito zoom).
+    const portrait = typeof window !== "undefined" && (window.matchMedia?.("(orientation: portrait)").matches ?? window.innerHeight > window.innerWidth);
+    const native = { facingMode: { exact: facing }, width: { ideal: portrait ? 1440 : 1920 }, height: { ideal: portrait ? 1920 : 1440 }, frameRate: { ideal: 30 }, resizeMode: "none" } as MediaTrackConstraints;
     const gum = (v: MediaTrackConstraints) => navigator.mediaDevices.getUserMedia({ video: v, audio: false });
     this.stream = await gum(native)
       .catch(() => gum({ ...native, facingMode: facing }))

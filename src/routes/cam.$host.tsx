@@ -38,6 +38,23 @@ function CamPage() {
     };
   }, []);
 
+  const liveRef = useRef(false);
+  liveRef.current = live;
+  const facingRef = useRef(facing);
+  facingRef.current = facing;
+  useEffect(() => {
+    const mq = window.matchMedia("(orientation: portrait)");
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const onRotate = () => {
+      clearTimeout(t);
+      t = setTimeout(() => { if (liveRef.current) void startRef.current(facingRef.current); }, 600);
+    };
+    mq.addEventListener("change", onRotate);
+    return () => { clearTimeout(t); mq.removeEventListener("change", onRotate); };
+  }, []);
+  const startRef = useRef<(f: "environment" | "user") => Promise<void>>(async () => {});
+  startRef.current = (f) => start(f);
+
   async function start(next: "environment" | "user" = facing) {
     if (busy) return;
     setBusy(true);
